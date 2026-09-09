@@ -24,6 +24,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
+// Match web assistantGroupIsForwardedBoundary: attribution labels do not establish turn ownership.
+private fun ChatMessage.isForwardedBoundary(): Boolean = provenance?.kind == "inter_session" && provenance.sourceTool == "sessions_send"
+
 /** Mirror web collapseCompletedTurnWork: only the contiguous work preceding a final reply folds. */
 internal fun ChatTimeline.withCompletedWorkGroups(
   messages: List<ChatMessage>,
@@ -42,9 +45,16 @@ internal fun ChatTimeline.withCompletedWorkGroups(
   chronological.forEach { item ->
     val startsTurn =
       item is ChatTimelineItem.Message &&
-        item.message.role
-          .trim()
-          .equals("user", ignoreCase = true)
+        (
+          item.message.role
+            .trim()
+            .equals("user", ignoreCase = true) ||
+            (
+              item.message.role
+                .trim()
+                .equals("assistant", ignoreCase = true) && item.message.isForwardedBoundary()
+            )
+        )
     if (turns.isEmpty() || startsTurn) turns.add(mutableListOf())
     turns.last().add(item)
   }
@@ -67,7 +77,7 @@ internal fun ChatTimeline.withCompletedWorkGroups(
         item.message.role
           .trim()
           .equals("assistant", ignoreCase = true) &&
-          item.message.senderLabel == null && item.message.content.all { it.type == "text" }
+          !item.message.isForwardedBoundary() && item.message.content.all { it.type == "text" }
       }
 
       else -> {
@@ -103,7 +113,7 @@ internal fun ChatTimeline.withCompletedWorkGroups(
         -1
       } else {
         turn.indexOfLast {
-          it is ChatTimelineItem.Message && it.message.role.equals("assistant", ignoreCase = true) && it.message.senderLabel == null
+          it is ChatTimelineItem.Message && it.message.role.equals("assistant", ignoreCase = true) && !it.message.isForwardedBoundary()
         }
       }
     }

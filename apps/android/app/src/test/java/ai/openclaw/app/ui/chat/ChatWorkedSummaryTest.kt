@@ -2,6 +2,7 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatMessageProvenance
 import ai.openclaw.app.chat.ChatToolActivity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -35,6 +36,39 @@ class ChatWorkedSummaryTest {
   @Test fun expandingRestoresOriginalOrderWithoutHidingFinalAnswer() {
     val timeline = buildChatTimeline(messages, 0, emptyList(), null).withCompletedWorkGroups(messages, false, setOf("final"), "agent:main:dashboard:test")
     assertEquals(listOf("message:final", "completed-tools:call", "message:commentary", "worked:final", "message:user"), timeline.items.map(::chatTimelineItemKey))
+  }
+
+  @Test fun forwardedAssistantStartsSeparateTurnWithoutHidingActualAnswer() {
+    val forwarded =
+      message("forwarded", "assistant", 150000).copy(
+        provenance = ChatMessageProvenance(kind = "inter_session", sourceTool = "sessions_send"),
+      )
+    for (expanded in listOf(emptySet(), setOf("final"))) {
+      val history = messages + forwarded
+      val timeline =
+        buildChatTimeline(history, 0, emptyList(), null)
+          .withCompletedWorkGroups(history, false, expanded, "agent:main:dashboard:test")
+      assertEquals("message:forwarded", chatTimelineItemKey(timeline.items.first()))
+      assertTrue(timeline.items.any { it is ChatTimelineItem.Message && it.message.id == "final" })
+      assertEquals(listOf("final"), timeline.items.filterIsInstance<ChatTimelineItem.WorkedSummary>().map { it.key })
+    }
+  }
+
+  @Test fun forwardedReportStaysVisibleWhenItsOwnResponseCompletes() {
+    val forwarded =
+      message("forwarded", "assistant", 150000).copy(
+        provenance = ChatMessageProvenance(kind = "inter_session", sourceTool = "sessions_send"),
+      )
+    val history =
+      messages + forwarded +
+        message("report-work", "assistant", 151000) + message("report-answer", "assistant", 160000)
+    val timeline =
+      buildChatTimeline(history, 0, emptyList(), null)
+        .withCompletedWorkGroups(history, false, emptySet(), "agent:main:dashboard:test")
+    assertEquals(
+      listOf("message:report-answer", "worked:report-answer", "message:forwarded", "message:final", "worked:final", "message:user"),
+      timeline.items.map(::chatTimelineItemKey),
+    )
   }
 
   @Test fun activeTurnAndToolOnlyResultRemainExposed() {
