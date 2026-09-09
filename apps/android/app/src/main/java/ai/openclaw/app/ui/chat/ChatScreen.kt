@@ -1680,7 +1680,7 @@ private fun ChatMessageList(
                         entryId = item.message.entryId,
                         role = item.message.role,
                         live = false,
-                        content = visibleContent(item.message),
+                        content = visibleContent(item.message).filter { it.toolActivity == null },
                         timestampMs = item.message.timestampMs,
                         onReplyMessage = onReplyMessage,
                         sessionActionsEnabled = sessionActionsEnabled,
@@ -2494,6 +2494,7 @@ private fun CompletedToolActivityItem(
   }
   var expanded by rememberSaveable(parentStableKey, saveableKey) { mutableStateOf(false) }
   val kind = completedToolKind(tool.name)
+  val resultPresentation = completedToolResultPresentation(tool)
   val preview =
     tool.detail
       ?.lineSequence()
@@ -2506,7 +2507,7 @@ private fun CompletedToolActivityItem(
       val name = completedToolDisplayName(tool.name)
       preview?.substringAfter(": ", preview)?.let { "$name · $it" } ?: name
     }
-  val expandable = tool.result?.isNotBlank() == true || (kind != CompletedToolKind.Command && tool.detail?.isNotBlank() == true)
+  val expandable = resultPresentation.expandable
   val state = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
   Column(
     verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -2582,7 +2583,15 @@ private fun CompletedToolActivityItem(
           overflow = TextOverflow.Ellipsis,
         )
       }
-      tool.result?.let { result ->
+      resultPresentation.output?.let { result ->
+        resultPresentation.outputLabel?.let { label ->
+          Text(
+            text = label,
+            modifier = Modifier.padding(start = 2.dp, end = 8.dp),
+            style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+            color = ClawTheme.colors.textMuted,
+          )
+        }
         Text(
           text = result,
           modifier = Modifier.padding(start = 2.dp, end = 8.dp, bottom = 5.dp),
@@ -2592,12 +2601,21 @@ private fun CompletedToolActivityItem(
           overflow = TextOverflow.Ellipsis,
         )
       }
+      resultPresentation.outcome?.let { outcome ->
+        Text(
+          text = outcome,
+          modifier = Modifier.padding(start = 2.dp, end = 8.dp, bottom = 5.dp),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
+      }
     }
   }
 }
 
 @Composable
 private fun CompletedCommandOutput(tool: ChatToolActivity) {
+  val resultPresentation = completedToolResultPresentation(tool)
   val shellShape = RoundedCornerShape(14.dp)
   Column(
     modifier =
@@ -2625,11 +2643,18 @@ private fun CompletedCommandOutput(tool: ChatToolActivity) {
             color = ClawTheme.colors.text,
           )
         }
-        tool.result?.takeIf { it.isNotBlank() }?.let { result ->
+        resultPresentation.output?.let { result ->
           Text(
             text = result,
             style = ClawTheme.type.caption.copy(fontFamily = FontFamily.Monospace),
             color = ClawTheme.colors.text,
+          )
+        }
+        resultPresentation.outcome?.let { outcome ->
+          Text(
+            text = outcome,
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
           )
         }
       }

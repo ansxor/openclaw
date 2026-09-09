@@ -86,6 +86,24 @@ internal fun completedCommandText(
   }
 }
 
+internal data class CompletedToolResultPresentation(
+  val expandable: Boolean,
+  val output: String?,
+  val outputLabel: String?,
+  val outcome: String?,
+)
+
+internal fun completedToolResultPresentation(tool: ChatToolActivity): CompletedToolResultPresentation {
+  val result = tool.result?.takeIf { it.isNotBlank() }
+  val hasDetail = completedToolKind(tool.name) != CompletedToolKind.Command && tool.detail?.isNotBlank() == true
+  return CompletedToolResultPresentation(
+    expandable = result != null || hasDetail || tool.isError,
+    output = result ?: if (tool.isError) nativeString("No output — tool failed.") else null,
+    outputLabel = if (tool.isError) nativeString("Tool error") else null,
+    outcome = if (tool.isError) nativeString("Failed") else null,
+  )
+}
+
 internal fun progressReceiptLabel(tool: ChatToolActivity): String {
   if (tool.isError) return nativeString("Progress update failed")
   val args = tool.arguments

@@ -86,8 +86,41 @@ class ToolActivityPresentationTest {
     assertEquals("Progress updated — 1/2 · Build APK", progressReceiptLabel(plan))
   }
 
+  @Test
+  fun `error flag makes blank result expandable with web failure copy`() {
+    val presentation = completedToolResultPresentation(tool("read", isError = true))
+
+    assertEquals(true, presentation.expandable)
+    assertEquals("Tool error", presentation.outputLabel)
+    assertEquals("No output — tool failed.", presentation.output)
+    assertEquals("Failed", presentation.outcome)
+  }
+
+  @Test
+  fun `command errors preserve result and expose failure presentation`() {
+    val presentation =
+      completedToolResultPresentation(tool("exec", result = "permission denied", isError = true))
+
+    assertEquals(true, presentation.expandable)
+    assertEquals("Tool error", presentation.outputLabel)
+    assertEquals("permission denied", presentation.output)
+    assertEquals("Failed", presentation.outcome)
+  }
+
+  @Test
+  fun `successful blank result remains nonexpandable and neutral`() {
+    val presentation = completedToolResultPresentation(tool("exec"))
+
+    assertEquals(false, presentation.expandable)
+    assertEquals(null, presentation.outputLabel)
+    assertEquals(null, presentation.output)
+    assertEquals(null, presentation.outcome)
+  }
+
   private fun tool(
     name: String,
     arguments: kotlinx.serialization.json.JsonObject? = null,
-  ) = ChatToolActivity("$name-id", name, null, null, false, arguments)
+    result: String? = null,
+    isError: Boolean = false,
+  ) = ChatToolActivity("$name-id", name, null, result, isError, arguments)
 }

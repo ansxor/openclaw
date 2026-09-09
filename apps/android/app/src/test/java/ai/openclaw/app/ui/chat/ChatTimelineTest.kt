@@ -50,15 +50,19 @@ class ChatTimelineTest {
             ChatMessageContent(type = "toolCall", toolActivity = ChatToolActivity("call-1", "exec", "command: pwd", null, false)),
           ),
         timestampMs = 1,
+        entryId = "mixed",
+        truncated = true,
       )
 
     val timeline = buildChatTimeline(listOf(mixed), 0, emptyList(), null)
 
     assertEquals(listOf("completed-tools:mixed", "message:mixed"), timeline.items.map(::chatTimelineItemKey))
+    assertTrue((timeline.items[1] as ChatTimelineItem.Message).message.matchesFullRead(mixed))
     assertEquals(
       "Checking now.",
       (timeline.items[1] as ChatTimelineItem.Message)
         .message.content
+        .filter { it.toolActivity == null }
         .single()
         .text,
     )

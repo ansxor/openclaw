@@ -140,7 +140,7 @@ internal fun buildChatTimeline(
         val visibleContent = message.content.filter { it.toolActivity == null }
         // Consumed results must not split adjacent invocation groups.
         if (tools.isEmpty() && visibleContent.isEmpty() && message.transcriptMarker == null) continue
-        val classified = classifyTranscriptMessage(message.copy(content = visibleContent), index)
+        val classified = classifyTranscriptMessage(message, index)
         if (tools.isNotEmpty() && visibleContent.isEmpty() && message.transcriptMarker == null) {
           completedTools.addAll(0, tools)
           completedToolsKey = message.entryId ?: message.idempotencyKey ?: message.id
