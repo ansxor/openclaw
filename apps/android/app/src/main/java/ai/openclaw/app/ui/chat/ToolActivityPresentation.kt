@@ -95,7 +95,12 @@ internal data class CompletedToolResultPresentation(
 
 internal fun completedToolResultPresentation(tool: ChatToolActivity): CompletedToolResultPresentation {
   val result = tool.result?.takeIf { it.isNotBlank() }
-  val hasDetail = completedToolKind(tool.name) != CompletedToolKind.Command && tool.detail?.isNotBlank() == true
+  val hasDetail =
+    if (completedToolKind(tool.name) == CompletedToolKind.Command) {
+      completedCommandText(tool, singleLine = false)?.isNotBlank() == true
+    } else {
+      tool.detail?.isNotBlank() == true
+    }
   return CompletedToolResultPresentation(
     expandable = result != null || hasDetail || tool.isError,
     output = result ?: if (tool.isError) nativeString("No output — tool failed.") else null,

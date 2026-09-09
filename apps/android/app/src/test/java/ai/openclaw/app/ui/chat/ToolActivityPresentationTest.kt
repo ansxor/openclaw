@@ -108,13 +108,28 @@ class ToolActivityPresentationTest {
   }
 
   @Test
-  fun `successful blank result remains nonexpandable and neutral`() {
+  fun `command without text or output remains nonexpandable and neutral`() {
     val presentation = completedToolResultPresentation(tool("exec"))
 
     assertEquals(false, presentation.expandable)
     assertEquals(null, presentation.outputLabel)
     assertEquals(null, presentation.output)
     assertEquals(null, presentation.outcome)
+  }
+
+  @Test
+  fun `commands remain inspectable without output`() {
+    val commands = listOf("mkdir -p reports\ncp report.txt reports/", "printf '%s' " + "long-argument".repeat(40))
+    for (command in commands) {
+      for (result in listOf(null, "", " \n\t")) {
+        val call = tool("exec", arguments = buildJsonObject { put("command", command) }, result = result)
+        val presentation = completedToolResultPresentation(call)
+        assertEquals(true, presentation.expandable)
+        assertEquals(command, completedCommandText(call, singleLine = false))
+        assertEquals(null, presentation.output)
+        assertEquals(null, presentation.outcome)
+      }
+    }
   }
 
   private fun tool(
