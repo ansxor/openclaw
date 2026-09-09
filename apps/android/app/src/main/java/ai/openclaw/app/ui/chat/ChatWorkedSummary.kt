@@ -77,7 +77,9 @@ internal fun ChatTimeline.withCompletedWorkGroups(
         item.message.role
           .trim()
           .equals("assistant", ignoreCase = true) &&
-          !item.message.isForwardedBoundary() && item.message.content.all { it.type == "text" }
+          !item.message.isForwardedBoundary() &&
+          // Tool activity is rendered separately; retain canonical content for full-message reads.
+          item.message.content.all { it.toolActivity != null || it.type == "text" }
       }
 
       else -> {

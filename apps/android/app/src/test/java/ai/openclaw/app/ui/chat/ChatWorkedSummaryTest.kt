@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatMessageProvenance
 import ai.openclaw.app.chat.ChatToolActivity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -36,6 +37,45 @@ class ChatWorkedSummaryTest {
   @Test fun expandingRestoresOriginalOrderWithoutHidingFinalAnswer() {
     val timeline = buildChatTimeline(messages, 0, emptyList(), null).withCompletedWorkGroups(messages, false, setOf("final"), "agent:main:dashboard:test")
     assertEquals(listOf("message:final", "completed-tools:call", "message:commentary", "worked:final", "message:user"), timeline.items.map(::chatTimelineItemKey))
+  }
+
+  @Test fun mixedCommentaryFoldsWithEarlierWorkAndExpandsWithCanonicalContent() {
+    val mixed =
+      message("mixed", "assistant", 4000).copy(
+        content = listOf(ChatMessageContent(text = "Checking the result")) + messages[2].content,
+        entryId = "mixed-entry",
+        truncated = true,
+      )
+    val history = messages.dropLast(1) + mixed + messages.last()
+    val original = buildChatTimeline(history, 0, emptyList(), null)
+    val collapsed = original.withCompletedWorkGroups(history, false, emptySet(), "agent:main:dashboard:test")
+    assertEquals(listOf("message:final", "worked:final", "message:user"), collapsed.items.map(::chatTimelineItemKey))
+
+    val expanded = original.withCompletedWorkGroups(history, false, setOf("final"), "agent:main:dashboard:test")
+    assertEquals(
+      original.items.map(::chatTimelineItemKey),
+      expanded.items.filterNot { it is ChatTimelineItem.WorkedSummary }.map(::chatTimelineItemKey),
+    )
+    val restored =
+      expanded.items
+        .filterIsInstance<ChatTimelineItem.Message>()
+        .single { it.message.id == "mixed" }
+        .message
+    assertSame(mixed, restored)
+    assertTrue(restored.matchesFullRead(mixed))
+  }
+
+  @Test fun mixedToolAndImageMessageRemainsAFoldingBoundary() {
+    val mixed =
+      message("mixed", "assistant", 4000).copy(
+        content = listOf(ChatMessageContent(text = "Screenshot"), ChatMessageContent(type = "image")) + messages[2].content,
+      )
+    val history = messages.dropLast(1) + mixed + messages.last()
+    val collapsed =
+      buildChatTimeline(history, 0, emptyList(), null)
+        .withCompletedWorkGroups(history, false, emptySet(), "agent:main:dashboard:test")
+    assertTrue(collapsed.items.any { it is ChatTimelineItem.Message && it.message === mixed })
+    assertTrue(collapsed.items.any { it is ChatTimelineItem.Message && it.message.id == "commentary" })
   }
 
   @Test fun forwardedAssistantStartsSeparateTurnWithoutHidingActualAnswer() {
