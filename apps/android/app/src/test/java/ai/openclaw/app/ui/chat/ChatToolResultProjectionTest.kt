@@ -2,6 +2,7 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatMessageProvenance
 import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.chat.ChatTranscriptMarker
 import org.junit.Assert.assertEquals
@@ -103,6 +104,50 @@ class ChatToolResultProjectionTest {
         ),
       ).items.filterIsInstance<ChatTimelineItem.CompletedTools>()
     assertEquals(listOf(call.copy(result = "completed output")), groups.flatMap { it.tools })
+  }
+
+  @Test
+  fun hiddenBoundariesFenceToolGroupsAndReusedCallIds() {
+    val call = ChatToolActivity("call-1", "bash", "command: pwd", null, false)
+    val output = ChatToolActivity("call-1", "tool", null, "new turn output", false)
+    val oldCall = activity("call", "toolCall", call)
+    val result = activity("result", "toolResult", output)
+    val emptyBoundary = activity("boundary", "toolResult", ChatToolActivity("empty", "tool", null, null, false)).copy(turnBoundary = true)
+    for (history in listOf(
+      listOf(oldCall, result.copy(turnBoundary = true)),
+      listOf(oldCall, emptyBoundary, result),
+    )) {
+      val groups = timeline(history).items.filterIsInstance<ChatTimelineItem.CompletedTools>()
+      assertEquals(2, groups.size)
+      assertEquals(listOf(output, call), groups.flatMap { it.tools })
+      assertEquals(listOf(true, false), groups.map { it.turnBoundary })
+    }
+  }
+
+  @Test
+  fun forwardedUserInputFencesPreviousTurnToolCallIds() {
+    val call = ChatToolActivity("call-1", "bash", "command: pwd", null, false)
+    val output = ChatToolActivity("call-1", "tool", null, "new turn output", false)
+    val report =
+      text("forwarded").copy(
+        provenance = ChatMessageProvenance(kind = "inter_session", sourceTool = "sessions_send"),
+      )
+    for (forwarded in listOf(report, report.copy(content = emptyList()))) {
+      val history = listOf(activity("call", "toolCall", call), text("previous-final"), forwarded, activity("result", "toolResult", output), text("new-final"))
+      val built = timeline(history)
+      val groups = built.items.filterIsInstance<ChatTimelineItem.CompletedTools>()
+      assertEquals(2, groups.size)
+      assertEquals(listOf(output, call), groups.flatMap { it.tools })
+      assertEquals(forwarded.content.isNotEmpty(), built.items.filterIsInstance<ChatTimelineItem.Message>().any { it.message.id == "forwarded" })
+      val collapsed = built.withCompletedWorkGroups(history, false, emptySet(), "agent:main:dashboard:test")
+      assertEquals(
+        listOf("new-final", "previous-final"),
+        collapsed.items
+          .filterIsInstance<ChatTimelineItem.Message>()
+          .map { it.message.id }
+          .filterNot { it == "forwarded" },
+      )
+    }
   }
 
   @Test

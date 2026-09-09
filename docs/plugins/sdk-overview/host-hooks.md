@@ -45,6 +45,40 @@ still does not invoke a discovery-only engine factory. `dispose()` must not dele
 durable state or disable another registration. Existing raw loader and Gateway
 lifetimes do not gain automatic disposal: keep their `cleanup(ctx)` behavior.
 
+Image and music generation also own fresh registrations acquired by
+`api.runtime.imageGeneration.generate(...)` and
+`api.runtime.musicGeneration.generate(...)`. They wait for the provider's complete
+image or audio buffers and tracked operation cleanup, then await registration disposal
+before resolving or rejecting. Existing managed registrations are retained for
+the operation; raw host registrations and caller-supplied providers retain their
+existing owner. Provider listing still returns caller-owned callbacks and does
+not acquire a generation lifetime. Return asynchronous provider work and have
+`dispose()` stop and join any additional background work it owns.
+
+Video generation uses the same ownership for
+`api.runtime.videoGeneration.generate(...)`, from model-capability lookup through
+completed video assets and result metadata. Video assets may contain buffers or
+provider-hosted URLs. Downloads after the call returns belong to the caller;
+registration disposal must not invalidate those completed artifacts.
+
+`api.runtime.tts.textToSpeechTelephony(...)` also owns fresh provider registrations
+through configuration, persona preparation, synthesis, and PCM result metadata.
+It retains managed registrations during the operation and preserves raw host
+ownership. Configured fallback catalogs stay separate from direct preference and
+override lookups. Returned audio buffers outlive registration disposal. The
+separate synchronous speech lookup and request-preparation APIs keep their
+existing caller lifetime; streaming speech is not part of this finite operation.
+
+For `image_generate` and `music_generate` tools prepared from an owned inspection,
+resources remain held through preflight and, once accepted, through generation, media saving, and
+any rollback. A `started` result acknowledges acceptance; it does not mean the
+work or cleanup has finished. If the original inspection retires during
+preflight, new task admission is rejected. Prepare tools from the current provider
+setup before retrying.
+An already accepted task keeps its captured resources until its work settles.
+Raw prepared registries retain their existing host lifetime; this does not enable
+automatic physical disposal for all prepared runtimes.
+
 Executable CLI command registration also uses an owned, uncached registry. Its
 resources remain available through asynchronous registration, command actions,
 and their tracked cleanup, then `dispose()` runs. Closing command preparation

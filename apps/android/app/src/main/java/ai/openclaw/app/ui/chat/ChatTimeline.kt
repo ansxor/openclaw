@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -14,6 +15,7 @@ import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 internal sealed class ChatTimelineItem {
   data class Message(
     val message: ChatMessage,
+    val turnBoundary: Boolean = message.turnBoundary,
   ) : ChatTimelineItem()
 
   /** Durable queued/failed offline command shown below the transcript until acked or deleted. */
@@ -41,6 +43,7 @@ internal sealed class ChatTimelineItem {
   data class CompletedTools(
     val key: String,
     val tools: List<ChatToolActivity>,
+    val turnBoundary: Boolean = false,
   ) : ChatTimelineItem()
 
   data class SubagentActivity(
@@ -105,7 +108,6 @@ internal fun buildChatTimeline(
 ): ChatTimeline {
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
   val visibleSubagents = visibleSubagentActivities(subagentActivities.values)
-  val toolsByMessage = projectTranscriptToolActivity(messages)
   val items =
     buildList {
       // reverseLayout: index 0 renders bottom-most; queued commands are the newest user input.
@@ -124,35 +126,7 @@ internal fun buildChatTimeline(
         )
       }
       if (pendingRunCount > 0) add(ChatTimelineItem.Thinking)
-      var completedTools = mutableListOf<ChatToolActivity>()
-      var completedToolsKey: String? = null
-
-      fun flushCompletedTools() {
-        if (completedTools.isNotEmpty()) {
-          add(ChatTimelineItem.CompletedTools(checkNotNull(completedToolsKey), coalesceToolActivity(completedTools)))
-          completedTools = mutableListOf()
-          completedToolsKey = null
-        }
-      }
-      for (index in messages.indices.reversed()) {
-        val message = messages[index]
-        val tools = toolsByMessage[index]
-        val visibleContent = message.content.filter { it.toolActivity == null }
-        // Consumed results must not split adjacent invocation groups.
-        if (tools.isEmpty() && visibleContent.isEmpty() && message.transcriptMarker == null) continue
-        val classified = classifyTranscriptMessage(message, index)
-        if (tools.isNotEmpty() && visibleContent.isEmpty() && message.transcriptMarker == null) {
-          completedTools.addAll(0, tools)
-          completedToolsKey = message.entryId ?: message.idempotencyKey ?: message.id
-        } else {
-          flushCompletedTools()
-          if (tools.isNotEmpty()) {
-            add(ChatTimelineItem.CompletedTools(message.entryId ?: message.idempotencyKey ?: message.id, coalesceToolActivity(tools)))
-          }
-          classified?.let(::add)
-        }
-      }
-      flushCompletedTools()
+      addAll(buildTranscriptTimeline(messages).asReversed())
     }
   if (items.isEmpty()) {
     return ChatTimeline(
@@ -198,6 +172,64 @@ internal fun buildChatTimeline(
         questions,
       ),
   )
+}
+
+// Gateway projects sessions_send user inputs as assistant rows; they still start a new turn.
+internal fun ChatMessage.isForwardedBoundary(): Boolean =
+  role.trim().equals("assistant", ignoreCase = true) &&
+    provenance?.kind == "inter_session" && provenance.sourceTool == "sessions_send"
+
+/** Build transcript rows in source order so hidden turn boundaries fence tool groups. */
+private fun buildTranscriptTimeline(messages: List<ChatMessage>): List<ChatTimelineItem> {
+  val toolsByMessage = projectTranscriptToolActivity(messages)
+  return buildList {
+    val completedTools = mutableListOf<ChatToolActivity>()
+    var completedToolsKey: String? = null
+    var completedToolsTurnBoundary = false
+    var pendingTurnBoundary = false
+
+    fun flushCompletedTools() {
+      if (completedTools.isEmpty()) return
+      add(ChatTimelineItem.CompletedTools(checkNotNull(completedToolsKey), coalesceToolActivity(completedTools), completedToolsTurnBoundary))
+      completedTools.clear()
+      completedToolsKey = null
+      completedToolsTurnBoundary = false
+    }
+
+    messages.forEachIndexed { index, message ->
+      if (message.turnBoundary || message.isForwardedBoundary()) {
+        flushCompletedTools()
+        pendingTurnBoundary = true
+      }
+      val tools = toolsByMessage[index]
+      val hasVisibleContent = message.content.any { it.toolActivity == null }
+      // Empty or consumed result envelopes must not erase a pending turn boundary.
+      if (tools.isEmpty() && !hasVisibleContent && message.transcriptMarker == null) return@forEachIndexed
+      val key = message.entryId ?: message.idempotencyKey ?: message.id
+      if (tools.isNotEmpty() && !hasVisibleContent && message.transcriptMarker == null) {
+        if (completedTools.isEmpty()) {
+          completedToolsKey = key
+          completedToolsTurnBoundary = pendingTurnBoundary
+          pendingTurnBoundary = false
+        }
+        completedTools.addAll(tools)
+      } else {
+        flushCompletedTools()
+        val classified = classifyTranscriptMessage(message, index)
+        if (classified is ChatTimelineItem.Message) {
+          add(classified.copy(turnBoundary = pendingTurnBoundary || classified.turnBoundary))
+          pendingTurnBoundary = false
+        } else {
+          classified?.let(::add)
+        }
+        if (tools.isNotEmpty()) {
+          add(ChatTimelineItem.CompletedTools(key, coalesceToolActivity(tools), pendingTurnBoundary))
+          pendingTurnBoundary = false
+        }
+      }
+    }
+    flushCompletedTools()
+  }
 }
 
 /**
@@ -254,31 +286,33 @@ private fun stableMessageVersion(message: ChatMessage): String {
     append(role)
     append(':')
     append(message.timestampMs ?: "")
-    message.content.forEach { content ->
-      append(':')
-      append(content.type)
-      append('=')
-      append(content.text?.hashCode() ?: 0)
-      append(',')
-      append(content.mimeType.orEmpty())
-      append(',')
-      append(content.fileName.orEmpty())
-      append(',')
-      append(content.base64?.length ?: 0)
-      append(',')
-      append(content.durationMs ?: "")
-      append(',')
-      append(content.toolActivity?.toolCallId.orEmpty())
-      append(',')
-      append(content.toolActivity?.detail?.hashCode() ?: 0)
-      append(',')
-      append(content.toolActivity?.result?.hashCode() ?: 0)
-      append(',')
-      append(content.toolActivity?.isError ?: false)
-      append(',')
-      append(content.toolActivity?.arguments?.hashCode() ?: 0)
-    }
+    message.content.forEach { appendContentVersion(it) }
   }
+}
+
+private fun StringBuilder.appendContentVersion(content: ChatMessageContent) {
+  append(':')
+  append(content.type)
+  append('=')
+  append(content.text?.hashCode() ?: 0)
+  append(',')
+  append(content.mimeType.orEmpty())
+  append(',')
+  append(content.fileName.orEmpty())
+  append(',')
+  append(content.base64?.length ?: 0)
+  append(',')
+  append(content.durationMs ?: "")
+  append(',')
+  append(content.toolActivity?.toolCallId.orEmpty())
+  append(',')
+  append(content.toolActivity?.detail?.hashCode() ?: 0)
+  append(',')
+  append(content.toolActivity?.result?.hashCode() ?: 0)
+  append(',')
+  append(content.toolActivity?.isError ?: false)
+  append(',')
+  append(content.toolActivity?.arguments?.hashCode() ?: 0)
 }
 
 internal fun ChatTimeline.containsUserMessageVersion(version: String): Boolean =
@@ -320,30 +354,9 @@ private fun latestContentVersion(
     append(latest?.role.orEmpty())
     append(':')
     append(latest?.timestampMs ?: "")
-    latest?.content?.forEach { content ->
-      append(':')
-      append(content.type)
-      append('=')
-      append(content.text?.hashCode() ?: 0)
-      append(',')
-      append(content.mimeType.orEmpty())
-      append(',')
-      append(content.fileName.orEmpty())
-      append(',')
-      append(content.base64?.length ?: 0)
-      append(',')
-      append(content.durationMs ?: "")
-      append(',')
-      append(content.toolActivity?.toolCallId.orEmpty())
-      append(',')
-      append(content.toolActivity?.detail?.hashCode() ?: 0)
-      append(',')
-      append(content.toolActivity?.result?.hashCode() ?: 0)
-      append(',')
-      append(content.toolActivity?.isError ?: false)
-      append(',')
-      append(content.toolActivity?.arguments?.hashCode() ?: 0)
-    }
+    latest?.content?.forEach { appendContentVersion(it) }
+    append(":turnBoundary=")
+    append(latest?.turnBoundary ?: false)
     append(":runs=")
     append(pendingRunCount)
     append(":tools=")
@@ -498,6 +511,10 @@ private fun projectTranscriptToolActivity(messages: List<ChatMessage>): List<Lis
   val calls = mutableMapOf<String, Pair<Int, Int>>()
   var turnRunId: String? = null
   messages.forEachIndexed { messageIndex, message ->
+    if (message.turnBoundary || message.isForwardedBoundary()) {
+      calls.clear()
+      turnRunId = null
+    }
     // A later turn may reuse a harness-local call ID.
     if (message.transcriptMarker != null) {
       calls.clear()

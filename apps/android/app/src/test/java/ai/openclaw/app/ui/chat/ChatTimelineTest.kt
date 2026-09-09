@@ -11,6 +11,8 @@ import ai.openclaw.app.chat.ChatSubagentActivity
 import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.chat.ChatTranscriptMarker
 import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -87,6 +89,51 @@ class ChatTimelineTest {
       )
 
     assertTrue(timeline("partial").latestContentVersion != timeline("complete").latestContentVersion)
+  }
+
+  @Test
+  fun completedToolMetadataChangesOnlyTheLiveEdgeVersion() {
+    val original = ChatToolActivity("call-1", "exec", "command: pwd", "output", false)
+
+    fun toolMessage(tool: ChatToolActivity) =
+      ChatMessage(
+        "result",
+        "toolresult",
+        listOf(ChatMessageContent(type = "toolResult", toolActivity = tool)),
+        1,
+      )
+
+    fun timeline(history: List<ChatMessage>) = buildChatTimeline(history, 0, emptyList(), null)
+    val originalVersion = timeline(listOf(toolMessage(original))).latestContentVersion
+    val final = textMessage(id = "final", role = "assistant", text = "Done.")
+    val historyVersion = timeline(listOf(toolMessage(original), final)).latestContentVersion
+    for (changed in listOf(
+      original.copy(detail = "command: ls"),
+      original.copy(isError = true),
+      original.copy(arguments = buildJsonObject { put("command", "pwd") }),
+    )) {
+      assertTrue(originalVersion != timeline(listOf(toolMessage(changed))).latestContentVersion)
+      assertEquals(historyVersion, timeline(listOf(toolMessage(changed), final)).latestContentVersion)
+    }
+  }
+
+  @Test
+  fun hiddenTurnBoundaryChangesTheLiveEdgeVersion() {
+    val message = textMessage(id = "reply", role = "assistant", text = "Completed")
+    val original = buildChatTimeline(listOf(message), 0, emptyList(), null)
+    val changed = buildChatTimeline(listOf(message.copy(turnBoundary = true)), 0, emptyList(), null)
+    assertTrue(original.latestContentVersion != changed.latestContentVersion)
+  }
+
+  @Test
+  fun canonicalReplacementPreservesAnIdempotencyBackedUserAnchor() {
+    val optimistic = textMessage(id = "optimistic", role = "user", text = "Send this").copy(idempotencyKey = "input:user")
+    val canonical = optimistic.copy(id = "canonical", content = listOf(ChatMessageContent(text = "Canonical text")), timestampMs = 2)
+    val first = buildChatTimeline(listOf(optimistic), 0, emptyList(), null)
+    val second = buildChatTimeline(listOf(canonical), 0, emptyList(), null)
+    assertEquals(first.latestUserMessageVersion, second.latestUserMessageVersion)
+    assertTrue(second.containsUserMessageVersion(requireNotNull(first.latestUserMessageVersion)))
+    assertTrue(first.latestContentVersion != second.latestContentVersion)
   }
 
   @Test

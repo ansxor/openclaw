@@ -7633,6 +7633,7 @@ class ChatController internal constructor(
           ?.trim()
           ?.takeIf(String::isNotEmpty),
       entryId = metadata?.get("id").asJsonStringOrNull()?.takeIf { it.isNotBlank() },
+      turnBoundary = metadata?.get("turnBoundary") == JsonPrimitive(true),
       isSyntheticDisplay = obj["openclawMessageToolMirror"].asObjectOrNull() != null || obj["openclawStreamFallback"].asObjectOrNull() != null,
       truncated =
         truncated == JsonPrimitive(true) ||

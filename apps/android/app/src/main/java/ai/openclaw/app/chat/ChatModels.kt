@@ -42,6 +42,8 @@ data class ChatMessage(
   val deliveryMirror: ChatDeliveryMirror? = null,
   val usage: ChatMessageUsage? = null,
   val cost: ChatMessageCost? = null,
+  /** Starts a turn whose input was intentionally omitted from display history. */
+  val turnBoundary: Boolean = false,
 ) {
   // Synthetic mirrors and commentary borrow a transcript ID, not its canonical text.
   // Keep the ID for timeline actions, but never use it to recover or retain full text.

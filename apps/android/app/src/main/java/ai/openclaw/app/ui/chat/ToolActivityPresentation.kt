@@ -30,8 +30,15 @@ internal fun completedToolDisplayName(name: String): String =
 
 internal fun completedToolGroupSummary(tools: List<ChatToolActivity>): String {
   val segments = mutableListOf<String>()
+  val counts = mutableMapOf<CompletedToolKind, Int>()
+  val others = mutableListOf<ChatToolActivity>()
+  tools.forEach { tool ->
+    val kind = completedToolKind(tool.name)
+    counts[kind] = (counts[kind] ?: 0) + 1
+    if (kind == CompletedToolKind.Progress || kind == CompletedToolKind.Other) others += tool
+  }
 
-  fun count(kind: CompletedToolKind) = tools.count { completedToolKind(it.name) == kind }
+  fun count(kind: CompletedToolKind) = counts[kind] ?: 0
   val commands = count(CompletedToolKind.Command)
   if (commands > 0) segments += if (commands == 1) nativeString("ran a command") else nativeString("ran \$count commands", commands)
   listOf(
@@ -44,21 +51,17 @@ internal fun completedToolGroupSummary(tools: List<ChatToolActivity>): String {
     val amount = count(kind)
     if (amount > 0) segments += if (amount == 1) labels.first else labels.second(amount)
   }
-  val others = tools.filter { completedToolKind(it.name) in setOf(CompletedToolKind.Progress, CompletedToolKind.Other) }
   if (others.isNotEmpty()) {
-    val allNames = others.map { completedToolDisplayName(it.name) }.distinct()
-    val names = allNames.take(2)
+    val names = others.map { completedToolDisplayName(it.name) }.distinct()
     segments +=
-      if (allNames.size <= 2) {
+      if (names.size <= 2) {
         val suffix = if (others.size > names.size) nativeString(" ×\$count", others.size) else ""
         nativeString("used \$names\$suffix", names.joinToString(", "), suffix)
-      } else if (others.size == 1) {
-        nativeString("used a tool")
       } else {
         nativeString("used \$count tools", others.size)
       }
   }
-  if (segments.isEmpty()) return if (tools.size == 1) nativeString("Ran a tool call") else nativeString("Ran \$count tool calls", tools.size)
+  if (segments.isEmpty()) return nativeString("Ran \$count tool calls", tools.size)
   return segments.joinToString(", ").replaceFirstChar { it.uppercase() }
 }
 

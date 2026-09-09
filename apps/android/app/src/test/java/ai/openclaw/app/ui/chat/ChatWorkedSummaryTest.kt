@@ -78,6 +78,63 @@ class ChatWorkedSummaryTest {
     assertTrue(collapsed.items.any { it is ChatTimelineItem.Message && it.message.id == "commentary" })
   }
 
+  @Test fun hiddenToolTurnsKeepSeparateFinalRepliesAndDurations() {
+    val history =
+      listOf(
+        messages[2].copy(id = "work-1", timestampMs = 1000, turnBoundary = true),
+        message("final-1", "assistant", 3000),
+        messages[2].copy(id = "work-2", timestampMs = 4000, turnBoundary = true),
+        message("final-2", "assistant", 9000),
+      )
+    val timeline =
+      buildChatTimeline(history, 0, emptyList(), null)
+        .withCompletedWorkGroups(history, false, emptySet(), "agent:main:dashboard:test")
+    assertEquals(listOf("message:final-2", "worked:final-2", "message:final-1", "worked:final-1"), timeline.items.map(::chatTimelineItemKey))
+    assertEquals(listOf(5000L, 2000L), timeline.items.filterIsInstance<ChatTimelineItem.WorkedSummary>().map { it.durationMs })
+  }
+
+  @Test fun emptyBoundaryCarrierMovesToVisibleRowWithoutChangingCanonicalMessage() {
+    val empty =
+      ChatMessage(
+        "empty",
+        "toolresult",
+        listOf(ChatMessageContent(type = "toolResult", toolActivity = ChatToolActivity("empty", "tool", null, null, false))),
+        2500,
+        turnBoundary = true,
+      )
+    val mixed = mixedToolMessage()
+    val history = listOf(message("previous-final", "assistant", 2000), empty, mixed, toolResult(), messages.last())
+    val timeline = buildChatTimeline(history, 0, emptyList(), null)
+    val row = timeline.items.filterIsInstance<ChatTimelineItem.Message>().single { it.message.id == mixed.id }
+    assertTrue(row.turnBoundary)
+    assertFalse(row.message.turnBoundary)
+    assertTrue(row.message.matchesFullRead(mixed))
+    val collapsed = timeline.withCompletedWorkGroups(history, false, emptySet(), "agent:main:dashboard:test")
+    assertEquals(listOf("message:final", "worked:final", "message:previous-final"), collapsed.items.map(::chatTimelineItemKey))
+  }
+
+  private fun mixedToolMessage() =
+    ChatMessage(
+      id = "mixed",
+      role = "assistant",
+      content =
+        listOf(
+          ChatMessageContent(text = "Checking now."),
+          ChatMessageContent(type = "toolCall", toolActivity = ChatToolActivity("c", "bash", "pwd", null, false)),
+        ),
+      timestampMs = 3000,
+      entryId = "mixed",
+      truncated = true,
+    )
+
+  private fun toolResult() =
+    ChatMessage(
+      id = "result",
+      role = "toolresult",
+      content = listOf(ChatMessageContent(type = "toolResult", toolActivity = ChatToolActivity("c", "bash", null, "ok", false))),
+      timestampMs = 4000,
+    )
+
   @Test fun forwardedAssistantStartsSeparateTurnWithoutHidingActualAnswer() {
     val forwarded =
       message("forwarded", "assistant", 150000).copy(

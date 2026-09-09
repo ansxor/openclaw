@@ -25,7 +25,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
 // Match web assistantGroupIsForwardedBoundary: attribution labels do not establish turn ownership.
-private fun ChatMessage.isForwardedBoundary(): Boolean = provenance?.kind == "inter_session" && provenance.sourceTool == "sessions_send"
 
 /** Mirror web collapseCompletedTurnWork: only the contiguous work preceding a final reply folds. */
 internal fun ChatTimeline.withCompletedWorkGroups(
@@ -44,17 +43,22 @@ internal fun ChatTimeline.withCompletedWorkGroups(
   val turns = mutableListOf<MutableList<ChatTimelineItem>>()
   chronological.forEach { item ->
     val startsTurn =
-      item is ChatTimelineItem.Message &&
-        (
-          item.message.role
-            .trim()
-            .equals("user", ignoreCase = true) ||
-            (
-              item.message.role
-                .trim()
-                .equals("assistant", ignoreCase = true) && item.message.isForwardedBoundary()
-            )
-        )
+      when (item) {
+        is ChatTimelineItem.Message -> {
+          item.turnBoundary ||
+            item.message.role
+              .trim()
+              .equals("user", ignoreCase = true) || item.message.isForwardedBoundary()
+        }
+
+        is ChatTimelineItem.CompletedTools -> {
+          item.turnBoundary
+        }
+
+        else -> {
+          false
+        }
+      }
     if (turns.isEmpty() || startsTurn) turns.add(mutableListOf())
     turns.last().add(item)
   }

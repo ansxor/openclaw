@@ -51,6 +51,7 @@ private data class CachedMessagePayload(
   val isSyntheticDisplay: Boolean = false,
   val runId: String? = null,
   val steerTargetRunId: String? = null,
+  val turnBoundary: Boolean = false,
 )
 
 /**
@@ -363,6 +364,7 @@ class RoomChatTranscriptCache internal constructor(
         isSyntheticDisplay = payload.isSyntheticDisplay,
         runId = payload.runId,
         steerTargetRunId = payload.steerTargetRunId,
+        turnBoundary = payload.turnBoundary,
       )
     }
   }
@@ -455,7 +457,7 @@ class RoomChatTranscriptCache internal constructor(
             }
           val hasPersistedMetadata =
             message.provenance != null || message.transcriptMarker != null || message.deliveryMirror != null ||
-              message.usage != null || message.cost != null
+              message.usage != null || message.cost != null || message.turnBoundary
           // An empty real call still ends the previous call’s usage snapshot.
           val isRealAssistantBoundary =
             message.role == "assistant" && !message.isSyntheticDisplay && !message.isTranscriptOnlyOpenClawAssistant()
@@ -474,6 +476,7 @@ class RoomChatTranscriptCache internal constructor(
               isSyntheticDisplay = message.isSyntheticDisplay,
               runId = message.runId,
               steerTargetRunId = message.steerTargetRunId,
+              turnBoundary = message.turnBoundary,
             )
           Triple(message, role, payload)
         }.takeLast(MAX_CACHED_MESSAGES_PER_SESSION)

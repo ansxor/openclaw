@@ -138,6 +138,35 @@ class ChatControllerMessageIdentityTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun liveHistoryKeepsOnlyExplicitBooleanTurnBoundaries() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "chat.history") {
+              """{"messages":[
+            {"role":"assistant","content":"first","__openclaw":{"turnBoundary":true}},
+            {"role":"assistant","content":"second","__openclaw":{"turnBoundary":false}},
+            {"role":"assistant","content":"third","__openclaw":{"turnBoundary":"true"}},
+            {"role":"assistant","content":"fourth","__openclaw":{"turnBoundary":null}},
+            {"role":"assistant","content":"legacy"}
+          ]}"""
+            } else {
+              emptyChatGatewayResponse(method)
+            }
+          },
+        )
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(listOf(true, false, false, false, false), controller.messages.value.map { it.turnBoundary })
+    }
+
+  @Test
   fun managedImagesParticipateInMessageIdentity() {
     fun message(artifactId: String) =
       ChatMessage(
