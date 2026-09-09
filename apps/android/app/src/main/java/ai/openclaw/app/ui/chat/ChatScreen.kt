@@ -2544,22 +2544,27 @@ private fun CompletedToolActivityItem(
           modifier = Modifier.size(16.dp),
           tint = ClawTheme.colors.textMuted,
         )
-        if (kind == CompletedToolKind.Command) {
+        Row(
+          modifier = Modifier.weight(1f),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          if (kind == CompletedToolKind.Command) {
+            Text(
+              text = nativeString("\$"),
+              modifier = Modifier.alignByBaseline().padding(end = 2.dp),
+              style = ClawTheme.type.caption.copy(fontFamily = FontFamily.Monospace),
+              color = ClawTheme.colors.textMuted,
+            )
+          }
           Text(
-            text = nativeString("\$"),
-            modifier = Modifier.padding(end = 2.dp),
-            style = ClawTheme.type.caption.copy(fontFamily = FontFamily.Monospace),
+            text = summary,
+            modifier = Modifier.weight(1f).alignByBaseline(),
+            style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Normal),
             color = ClawTheme.colors.textMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
           )
         }
-        Text(
-          text = summary,
-          modifier = Modifier.weight(1f),
-          style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Normal),
-          color = ClawTheme.colors.textMuted,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
         if (expandable) {
           Icon(
             imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.AutoMirrored.Filled.KeyboardArrowRight,
