@@ -8,6 +8,7 @@ import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSubagentActivity
+import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.chat.ChatTranscriptMarker
 import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
 import org.junit.Assert.assertEquals
@@ -15,6 +16,75 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatTimelineTest {
+  @Test
+  fun groupsContiguousToolOnlyMessagesWithoutSwallowingAssistantText() {
+    val call = ChatToolActivity("call-1", "read", "path: README.md", null, false)
+    val result = ChatToolActivity("call-1", "read", null, "contents", false)
+    val messages =
+      listOf(
+        textMessage(id = "assistant-before", role = "assistant", text = "I will inspect it."),
+        ChatMessage("call", "assistant", listOf(ChatMessageContent(type = "toolCall", toolActivity = call)), 2),
+        ChatMessage("result", "toolresult", listOf(ChatMessageContent(type = "toolResult", toolActivity = result)), 3),
+        textMessage(id = "assistant-after", role = "assistant", text = "Done."),
+      )
+
+    val timeline = buildChatTimeline(messages, 0, emptyList(), null)
+
+    assertEquals(
+      listOf("message:assistant-after", "completed-tools:call", "message:assistant-before"),
+      timeline.items.map(::chatTimelineItemKey),
+    )
+    val group = timeline.items.filterIsInstance<ChatTimelineItem.CompletedTools>().single()
+    assertEquals(listOf(ChatToolActivity("call-1", "read", "path: README.md", "contents", false)), group.tools)
+  }
+
+  @Test
+  fun mixedAssistantMessageKeepsVisibleTextBesideItsToolGroup() {
+    val mixed =
+      ChatMessage(
+        id = "mixed",
+        role = "assistant",
+        content =
+          listOf(
+            ChatMessageContent(type = "text", text = "Checking now."),
+            ChatMessageContent(type = "toolCall", toolActivity = ChatToolActivity("call-1", "exec", "command: pwd", null, false)),
+          ),
+        timestampMs = 1,
+      )
+
+    val timeline = buildChatTimeline(listOf(mixed), 0, emptyList(), null)
+
+    assertEquals(listOf("completed-tools:mixed", "message:mixed"), timeline.items.map(::chatTimelineItemKey))
+    assertEquals(
+      "Checking now.",
+      (timeline.items[1] as ChatTimelineItem.Message)
+        .message.content
+        .single()
+        .text,
+    )
+  }
+
+  @Test
+  fun completedToolResultChangesLatestContentVersion() {
+    fun timeline(result: String) =
+      buildChatTimeline(
+        messages =
+          listOf(
+            ChatMessage(
+              "result",
+              "toolresult",
+              listOf(ChatMessageContent(type = "toolResult", toolActivity = ChatToolActivity("call-1", "exec", null, result, false))),
+              1,
+            ),
+          ),
+        pendingRunCount = 0,
+        pendingToolCalls = emptyList(),
+        streamingAssistantText = null,
+      )
+
+    assertTrue(timeline("partial").latestContentVersion != timeline("complete").latestContentVersion)
+  }
+
   @Test
   fun activeRunAnchorsNewestUserPromptInsteadOfThinkingRow() {
     val user = textMessage(id = "user-1", role = "user", text = "hello")
