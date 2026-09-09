@@ -24,6 +24,22 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
 
+## Review changes
+
+Open a conversation's three-dot **Chat actions** menu and choose **Review changes**.
+The full-screen native viewer loads the same `sessions.diff` snapshot as the web Review panel.
+Close it with Android Back or **Close review**; pulling down does not dismiss it.
+Choose **All changes**, **Uncommitted**, or an available commit from the scope menu.
+Tap a file header to collapse it, swipe horizontally over code to pan while line
+numbers stay fixed, or use **Copy patch** to copy that file's returned patch.
+**Refresh changes** requests a new snapshot; the viewer does not stream updates.
+
+The Gateway owns repository selection and session-start filtering. This is a
+checkout snapshot, not an exact audit of the assistant's edits. Binary files,
+truncated patches, stopped workspaces, and unavailable repositories are identified
+in the viewer. Switching conversation or Gateway closes the review; safe fold
+layout changes preserve the opening.
+
 ## Foldable layout
 
 With a full-height vertical separator reported by AndroidX WindowManager, the

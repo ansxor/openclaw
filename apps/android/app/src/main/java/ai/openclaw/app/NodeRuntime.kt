@@ -34,8 +34,11 @@ import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SESSION_UNREAD_ACK_CAPABILITY
 import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionDiffScope
+import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
+import ai.openclaw.app.chat.parseSessionDiff
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
@@ -6918,6 +6921,37 @@ class NodeRuntime private constructor(
       writePendingProfileAppearancePreference(gatewayScope, owner.lease, owner.scope, key, value)
     if (written && key == "ui.accent") refreshBrandingFromGateway()
     return written
+  }
+
+  /** Loads the same bounded checkout snapshot as the web Review panel. */
+  suspend fun loadSessionDiff(
+    sessionKey: String,
+    agentId: String?,
+    scope: SessionDiffScope,
+    commit: String? = null,
+    expectedGatewayStableId: String,
+  ): SessionDiffSnapshot {
+    require(sessionKey.isNotBlank()) { "Select a conversation to review its changes." }
+    require((scope == SessionDiffScope.Commit) == !commit.isNullOrBlank()) {
+      "Select a commit only when reviewing a single commit."
+    }
+    val gatewayScope =
+      captureGatewayDataScope()
+        ?: throw IllegalStateException("Connect to the conversation's gateway to review changes.")
+    if (gatewayScope.stableId != expectedGatewayStableId) {
+      throw CancellationException("The conversation's gateway changed.")
+    }
+    val params =
+      buildJsonObject {
+        put("sessionKey", JsonPrimitive(sessionKey))
+        agentId?.takeIf { it.isNotBlank() }?.let { put("agentId", JsonPrimitive(it)) }
+        put("scope", JsonPrimitive(scope.wireValue))
+        if (scope == SessionDiffScope.Commit) put("commit", JsonPrimitive(commit))
+      }
+    val payload = requestGatewayData(gatewayScope, GatewayMethod.SessionsDiff.rawValue, params.toString(), timeoutMs = 30_000)
+    val snapshot = parseSessionDiff(json, payload)
+    check(snapshot.sessionKey == sessionKey) { "The gateway returned changes for a different conversation." }
+    return snapshot
   }
 
   /** Lists one directory of the active agent's workspace (read-only RPC). */

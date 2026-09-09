@@ -146,6 +146,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GppMaybe
 import androidx.compose.material.icons.filled.HourglassEmpty
@@ -547,6 +548,12 @@ internal fun ChatScreen(
         viewModel.isCurrentChatComposerOwner(expected)
       }
     }
+  val reviewDiff =
+    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
+      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
+        viewModel.isCurrentChatComposerOwner(expected)
+      }
+    }
   val branchPicker =
     remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
       ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
@@ -568,20 +575,23 @@ internal fun ChatScreen(
     modelPicker.publishFeatures(publication)
     effortPicker.publishFeatures(publication)
     backgroundTasks.publishFeatures(publication)
+    reviewDiff.publishFeatures(publication)
     branchPicker.publishFeatures(publication)
   }
   SideEffect {
     modelPicker.refreshTarget()
     effortPicker.refreshTarget()
     backgroundTasks.refreshTarget()
+    reviewDiff.refreshTarget()
     branchPicker.refreshTarget()
     branchOpening?.let { isCurrentBranchOpening(it) }
   }
-  DisposableEffect(modelPicker, effortPicker, backgroundTasks, branchPicker) {
+  DisposableEffect(modelPicker, effortPicker, backgroundTasks, reviewDiff, branchPicker) {
     onDispose {
       modelPicker.dispose()
       effortPicker.dispose()
       backgroundTasks.dispose()
+      reviewDiff.dispose()
       branchPicker.dispose()
     }
   }
@@ -888,6 +898,10 @@ internal fun ChatScreen(
       onOpenDashboard = {
         dismissDetails()
         onOpenDashboard(sessionKey)
+      },
+      onOpenReviewDiff = {
+        dismissDetails()
+        reviewDiff.open(composerOwner, sessionKey)
       },
       onOpenBackgroundTasks = {
         dismissDetails()
@@ -1304,6 +1318,16 @@ internal fun ChatScreen(
       )
     }
   }
+  reviewDiff.visible?.let { opening ->
+    key(opening) {
+      SessionDiffSheet(
+        viewModel = viewModel,
+        opening = opening,
+        admit = { reviewDiff.admit(opening) },
+        onDismiss = { if (reviewDiff.admit(opening)) reviewDiff.retire(opening) },
+      )
+    }
+  }
   backgroundTasks.visible?.let { opening ->
     key(opening) {
       BackgroundTasksSheet(
@@ -1359,6 +1383,7 @@ private fun ChatHeader(
   onRefresh: () -> Unit,
   onOpenDashboard: () -> Unit,
   onOpenBackgroundTasks: () -> Unit,
+  onOpenReviewDiff: () -> Unit,
   onOpenBranchSwitcher: () -> Unit,
 ) {
   var actionsMenuExpanded by remember { mutableStateOf(false) }
@@ -1500,6 +1525,7 @@ private fun ChatHeader(
                   ),
                 )
               }
+              add(FoldAwareMenuItem("review-diff", nativeString("Review changes"), onOpenReviewDiff, Icons.Default.Difference))
               add(FoldAwareMenuItem("dashboard", nativeString("Dashboard"), onOpenDashboard, Icons.Default.Dashboard))
               add(FoldAwareMenuItem("background", nativeString("Background tasks"), onOpenBackgroundTasks, Icons.Default.HourglassEmpty))
               if (workspaceGit) {

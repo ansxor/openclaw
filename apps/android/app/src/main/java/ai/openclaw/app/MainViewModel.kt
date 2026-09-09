@@ -20,6 +20,8 @@ import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionDiffScope
+import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
@@ -1698,6 +1700,14 @@ class MainViewModel private constructor(
       !runtime.chatSessionBranchesLoading.value &&
       runtime.chatSessionBranches.value.any { it.leafEntryId == leafEntryId && !it.active }
   }
+
+  suspend fun loadSessionDiff(
+    sessionKey: String,
+    agentId: String?,
+    scope: SessionDiffScope,
+    commit: String? = null,
+    expectedGatewayStableId: String,
+  ): SessionDiffSnapshot = ensureRuntime().loadSessionDiff(sessionKey, agentId, scope, commit, expectedGatewayStableId)
 
   suspend fun listWorkspaceFiles(
     path: String?,

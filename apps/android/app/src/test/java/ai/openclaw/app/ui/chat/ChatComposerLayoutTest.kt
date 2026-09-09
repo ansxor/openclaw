@@ -68,6 +68,7 @@ import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.AbstractComposeView
@@ -1737,6 +1738,106 @@ class ChatComposerLayoutTest {
       composeRule.waitUntil { !model.isCurrentChatComposerOwner(owner) }
       composeRule.waitForIdle()
       composeRule.onNode(isDialog()).assertDoesNotExist()
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun reviewMenuLoadsCurrentConversationSnapshotAndRetiresOnSessionSwitch() {
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(stableId = AndroidScreenshotFixture.gatewayId, kind = GatewayRegistryEntryKind.MANUAL, name = "Review fixture"),
+    )
+    prefs.gatewayRegistry.setActive(AndroidScreenshotFixture.gatewayId)
+    val model = showChat(viewportWidth = 720.dp, viewportHeight = { 720.dp })
+    val owner = model.captureChatShareOwner()
+    val sessionKey = controller.sessionKey.value
+    val calls = ConcurrentLinkedQueue<Pair<String, String?>>()
+    val endpointField = NodeRuntime::class.java.getDeclaredField("connectedEndpoint").apply { isAccessible = true }
+    val previousEndpoint = endpointField.get(runtime)
+    val previousRequest = runtime.gatewayDataRequestOverrideForTests
+    try {
+      endpointField.set(
+        runtime,
+        ai.openclaw.app.gateway.GatewayEndpoint(
+          stableId = AndroidScreenshotFixture.gatewayId,
+          name = "Review fixture",
+          host = "127.0.0.1",
+          port = 18789,
+        ),
+      )
+      runtime.gatewayDataRequestOverrideForTests = { gatewayId, method, params ->
+        assertEquals(owner.gatewayStableId, gatewayId)
+        assertEquals("sessions.diff", method)
+        calls.add(method to params)
+        buildJsonObject {
+          put("sessionKey", JsonPrimitive(sessionKey))
+          put("additions", JsonPrimitive(1))
+          put("deletions", JsonPrimitive(0))
+          put(
+            "files",
+            buildJsonArray {
+              add(
+                buildJsonObject {
+                  put("path", JsonPrimitive("review-fixture.txt"))
+                  put("status", JsonPrimitive("added"))
+                  put("additions", JsonPrimitive(1))
+                  put("deletions", JsonPrimitive(0))
+                  put("patch", JsonPrimitive("@@ -0,0 +1 @@\n+Snapshot from the conversation workspace\n"))
+                },
+              )
+            },
+          )
+        }.toString()
+      }
+      composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
+      composeRule.onNodeWithText(nativeString("Review changes")).performClick()
+      composeRule.waitUntil {
+        composeRule.onAllNodesWithText("Snapshot from the conversation workspace", substring = true).fetchSemanticsNodes().isNotEmpty()
+      }
+      composeRule.onNodeWithText("Snapshot from the conversation workspace", substring = true).assertIsDisplayed()
+      composeRule.onNodeWithContentDescription(nativeString("Refresh changes")).assertIsDisplayed()
+      composeRule.onNode(isDialog()).performTouchInput { swipeDown() }
+      composeRule.waitForIdle()
+      composeRule.onNodeWithContentDescription(nativeString("Close review")).assertIsDisplayed()
+      val request = Json.parseToJsonElement(requireNotNull(calls.single().second)).jsonObject
+      assertEquals(JsonPrimitive(sessionKey), request["sessionKey"])
+      assertEquals(JsonPrimitive(owner.agentId), request["agentId"])
+      assertEquals(JsonPrimitive("all"), request["scope"])
+      val capture = composeRule.onNode(isDialog()).captureToImage()
+      java.io.File("build/outputs/session-diff/review-fullscreen.png").also { file ->
+        checkNotNull(file.parentFile).mkdirs()
+        file.outputStream().use { stream ->
+          capture.asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)
+        }
+      }
+      composeRule.onNodeWithContentDescription(nativeString("Close review")).performClick()
+      composeRule.waitForIdle()
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+
+      fun reopenReview() {
+        composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
+        composeRule.onNodeWithText(nativeString("Review changes")).performClick()
+        composeRule.waitUntil {
+          composeRule.onAllNodesWithText("Snapshot from the conversation workspace", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+      }
+      reopenReview()
+      val reviewDialog = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+      composeRule.runOnIdle { reviewDialog.onBackPressedDispatcher.onBackPressed() }
+      composeRule.waitForIdle()
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+      reopenReview()
+      val other = model.chatSessions.value.first { it.key != sessionKey }
+      composeRule.runOnIdle { model.switchChatSession(other.key, other.ownerAgentId) }
+      composeRule.waitUntil { !model.isCurrentChatComposerOwner(owner) }
+      composeRule.waitForIdle()
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+      composeRule.onNodeWithContentDescription(nativeString("Refresh changes")).assertDoesNotExist()
+      composeRule.onNodeWithText("Snapshot from the conversation workspace", substring = true).assertDoesNotExist()
+      assertEquals("Retiring review must not reload it for the next conversation", 3, calls.size)
+    } finally {
+      runtime.gatewayDataRequestOverrideForTests = previousRequest
+      endpointField.set(runtime, previousEndpoint)
     }
   }
 
