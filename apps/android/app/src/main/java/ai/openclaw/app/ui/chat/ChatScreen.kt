@@ -149,6 +149,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GppMaybe
 import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
@@ -2376,6 +2377,7 @@ private fun CompletedToolActivity(
     return
   }
   var expanded by rememberSaveable(stableKey) { mutableStateOf(false) }
+  var showAll by rememberSaveable(stableKey) { mutableStateOf(false) }
   val summary = completedToolGroupSummary(tools)
   val state = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
   // Remeasure disclosures immediately: nested size springs leave blank space
@@ -2384,7 +2386,10 @@ private fun CompletedToolActivity(
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
     Surface(
-      onClick = { expanded = !expanded },
+      onClick = {
+        expanded = !expanded
+        if (!expanded) showAll = false
+      },
       modifier =
         Modifier
           .fillMaxWidth()
@@ -2439,20 +2444,38 @@ private fun CompletedToolActivity(
             }.padding(start = 12.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
       ) {
-        tools.take(COMPLETED_TOOL_DETAIL_LIMIT).forEachIndexed { index, tool ->
+        (if (showAll) tools else tools.take(COMPLETED_TOOL_DETAIL_LIMIT)).forEachIndexed { index, tool ->
           CompletedToolActivityItem(
             tool = tool,
             saveableKey = tool.toolCallId ?: "$index:${tool.name}:${tool.detail.orEmpty().hashCode()}",
             parentStableKey = stableKey,
           )
         }
-        if (tools.size > COMPLETED_TOOL_DETAIL_LIMIT) {
-          Text(
-            text = nativeString("\${count} more tools", tools.size - COMPLETED_TOOL_DETAIL_LIMIT),
-            modifier = Modifier.padding(vertical = 6.dp),
-            style = ClawTheme.type.caption,
-            color = ClawTheme.colors.textSubtle,
-          )
+        if (!showAll && tools.size > COMPLETED_TOOL_DETAIL_LIMIT) {
+          Surface(
+            onClick = { showAll = true },
+            modifier = Modifier.fillMaxWidth().semantics { role = Role.Button },
+            shape = RoundedCornerShape(4.dp),
+            color = Color.Transparent,
+            contentColor = ClawTheme.colors.textMuted,
+          ) {
+            Row(
+              modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget).padding(vertical = 12.dp),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Text(
+                text = nativeString("Show all \${count} tools", tools.size),
+                modifier = Modifier.weight(1f, fill = false),
+                style = ClawTheme.type.caption,
+              )
+              Icon(
+                imageVector = Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+              )
+            }
+          }
         }
       }
     }
