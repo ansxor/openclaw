@@ -32,8 +32,10 @@ missing, update the Gateway before reviewing changes on Android.
 The full-screen native viewer loads the same `sessions.diff` snapshot as the web Review panel.
 Close it with Android Back or **Close review**; pulling down does not dismiss it.
 Choose **All changes**, **Uncommitted**, or an available commit from the scope menu.
-Tap a file header to collapse it, swipe horizontally over code to pan while line
-numbers stay fixed, or use **Copy patch** to copy that file's returned patch.
+Tap a file header to collapse it. Line numbers are hidden by default; tap code to
+slide them in, and tap again to hide them. Swipe horizontally over code to pan
+while visible line numbers stay fixed. Addition/deletion markers remain visible.
+Use **Copy patch** to copy that file's returned patch.
 **Refresh changes** requests a new snapshot; the viewer does not stream updates.
 
 The Gateway owns repository selection and session-start filtering. This is a

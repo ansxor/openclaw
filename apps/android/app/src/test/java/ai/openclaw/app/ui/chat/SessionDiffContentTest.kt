@@ -17,6 +17,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -63,7 +64,20 @@ class SessionDiffContentTest {
       composeRule.onNodeWithText("@@ -8,3 +8,3 @@", substring = true).assertIsDisplayed()
       composeRule.onNodeWithText("Binary file changed").assertIsDisplayed()
       composeRule.onNodeWithText("This file’s patch was truncated.").assertIsDisplayed()
-      capture(File(evidence, if (isDark) "review-dark.png" else "review-light.png"))
+      val theme = if (isDark) "dark" else "light"
+      val addedLine = composeRule.onNodeWithText("+ const retries = 3;", substring = true)
+      addedLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
+      composeRule.onNodeWithText("+ const retries = 3;").assertIsDisplayed()
+      capture(File(evidence, "review-$theme-hidden.png"))
+      addedLine.performTouchInput { click() }
+      addedLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers shown"))
+      composeRule.onNodeWithText(" 8 + const retries = 3;").assertIsDisplayed()
+      // One tap reveals the gutters throughout the viewer, including other files.
+      composeRule.onNodeWithText(" 1 + export const ready = true;").assertIsDisplayed()
+      capture(File(evidence, "review-$theme-shown.png"))
+      addedLine.performTouchInput { click() }
+      addedLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
+      composeRule.onNodeWithText("+ export const ready = true;").assertIsDisplayed()
 
       val header = composeRule.onNodeWithText("src/retry.ts")
       header.performClick()
@@ -94,17 +108,26 @@ class SessionDiffContentTest {
         SessionDiffContent(snapshot, files, false, null, SessionDiffScope.All, null, { _, _ -> }, {}, {}, Modifier.fillMaxSize())
       }
     }
+    val codeLine = composeRule.onNodeWithText(text, substring = true)
+    codeLine.performTouchInput { click() }
     val scroller = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange))
     composeRule.waitForIdle()
     val before = scroller.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange]
     assertTrue("Wide glyphs must expose their overflow instead of clipping permanently", before.maxValue() > 0f)
     assertEquals(0f, before.value(), 0.01f)
-    scroller.performTouchInput { swipeLeft() }
+    codeLine.performTouchInput { swipeLeft() }
     composeRule.waitForIdle()
     val after = scroller.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange]
     assertTrue("A horizontal gesture must reveal the rest of the Unicode line", after.value() > 0f)
     assertTrue(after.value() <= after.maxValue())
-    composeRule.onNodeWithText(text, substring = true).assertIsDisplayed()
+    codeLine.assertIsDisplayed()
+    codeLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers shown"))
+    // Hiding gutters widens the code viewport and must clamp any previous pan.
+    codeLine.performTouchInput { click() }
+    composeRule.waitForIdle()
+    val hidden = scroller.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange]
+    assertTrue(hidden.value() <= hidden.maxValue())
+    codeLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
   }
 
   @Test

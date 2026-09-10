@@ -15,6 +15,8 @@ import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.foldAwareSheet
 import android.graphics.Paint
 import android.graphics.Typeface
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -205,6 +207,7 @@ internal fun SessionDiffContent(
 ) {
   var scopeMenu by remember { mutableStateOf(false) }
   var collapsed by remember { mutableStateOf(emptySet<String>()) }
+  var showLineNumbers by remember { mutableStateOf(false) }
   val scopeLabel =
     when (selectedScope) {
       SessionDiffScope.All -> nativeString("All changes")
@@ -272,9 +275,15 @@ internal fun SessionDiffContent(
       }
 
       snapshot != null -> {
-        SessionDiffFiles(snapshot, files, collapsed, { path ->
-          collapsed = if (path in collapsed) collapsed - path else collapsed + path
-        }, Modifier.weight(1f))
+        SessionDiffFiles(
+          snapshot,
+          files,
+          collapsed,
+          { path -> collapsed = if (path in collapsed) collapsed - path else collapsed + path },
+          showLineNumbers,
+          { showLineNumbers = !showLineNumbers },
+          Modifier.weight(1f),
+        )
       }
     }
   }
@@ -286,6 +295,8 @@ private fun SessionDiffFiles(
   files: List<SessionDiffFileView>,
   collapsed: Set<String>,
   toggle: (String) -> Unit,
+  showLineNumbers: Boolean,
+  toggleLineNumbers: () -> Unit,
   modifier: Modifier,
 ) {
   val context = LocalContext.current
@@ -312,10 +323,16 @@ private fun SessionDiffFiles(
         } ?: 0,
       )
     }
-  val gutterWidth =
+  val numberWidth =
     remember(codePaint, gutterDigits) {
-      codePaint.measureText("${"0".repeat(gutterDigits)} ${"0".repeat(gutterDigits)} + ")
+      codePaint.measureText("${"0".repeat(gutterDigits)} ${"0".repeat(gutterDigits)} ")
     }
+  val revealedNumberWidth by animateFloatAsState(
+    targetValue = if (showLineNumbers) numberWidth else 0f,
+    animationSpec = tween(durationMillis = 200),
+    label = "Diff line numbers",
+  )
+  val gutterWidth = revealedNumberWidth + codePaint.measureText("+ ")
   val contentWidth by produceState(0f, files, codePaint) {
     // Use the same native shaping for scroll bounds and drawing: Unicode glyphs
     // need not occupy one ASCII cell, even with a monospace primary typeface.
@@ -405,7 +422,17 @@ private fun SessionDiffFiles(
           }
         }
         itemsIndexed(view.lines, key = { index, _ -> "line:${file.path}:$index" }, contentType = { _, _ -> "line" }) { _, line ->
-          SessionDiffCodeRow(line, horizontalOffset, codePaint, gutterDigits, gutterWidth)
+          SessionDiffCodeRow(
+            line,
+            horizontalOffset,
+            codePaint,
+            gutterDigits,
+            numberWidth,
+            revealedNumberWidth,
+            gutterWidth,
+            showLineNumbers,
+            toggleLineNumbers,
+          )
         }
         if (file.truncated) item(key = "truncated:${file.path}") { DiffNotice(nativeString("This file’s patch was truncated.")) }
       }
@@ -424,7 +451,11 @@ private fun SessionDiffCodeRow(
   offset: Float,
   codePaint: Paint,
   gutterDigits: Int,
+  numberWidth: Float,
+  revealedNumberWidth: Float,
   gutterWidth: Float,
+  showLineNumbers: Boolean,
+  toggleLineNumbers: () -> Unit,
 ) {
   val colors = ClawTheme.colors
   val style = ClawTheme.type.mono
@@ -437,10 +468,18 @@ private fun SessionDiffCodeRow(
       SessionDiffLineKind.Deletion -> "−"
       else -> " "
     }
+  val toggleLabel = if (showLineNumbers) nativeString("Hide line numbers") else nativeString("Show line numbers")
+  val numbersState = if (showLineNumbers) nativeString("Line numbers shown") else nativeString("Line numbers hidden")
   Canvas(
-    Modifier.fillMaxWidth().height(rowHeight).semantics {
-      text = AnnotatedString("${line.oldLine ?: ""} ${line.newLine ?: ""} $sign ${line.text}")
-    },
+    Modifier
+      .fillMaxWidth()
+      .height(rowHeight)
+      .clickable(interactionSource = null, indication = null, onClickLabel = toggleLabel, onClick = toggleLineNumbers)
+      .semantics {
+        stateDescription = numbersState
+        val numbers = if (showLineNumbers) "${line.oldLine ?: ""} ${line.newLine ?: ""} " else ""
+        text = AnnotatedString("$numbers$sign ${line.text}")
+      },
   ) {
     val background =
       when (line.kind) {
@@ -451,11 +490,14 @@ private fun SessionDiffCodeRow(
       }
     drawRect(colors.codeBg)
     drawRect(background)
-    val gutter =
+    val numbers =
       "${line.oldLine?.toString().orEmpty().padStart(gutterDigits)} " +
-        "${line.newLine?.toString().orEmpty().padStart(gutterDigits)} $sign "
+        "${line.newLine?.toString().orEmpty().padStart(gutterDigits)} "
     val baseline = (size.height - codePaint.fontMetrics.bottom - codePaint.fontMetrics.top) / 2f
-    drawIntoCanvas { it.nativeCanvas.drawText(gutter, 0f, baseline, gutterPaint) }
+    clipRect(right = revealedNumberWidth) {
+      drawIntoCanvas { it.nativeCanvas.drawText(numbers, revealedNumberWidth - numberWidth, baseline, gutterPaint) }
+    }
+    drawIntoCanvas { it.nativeCanvas.drawText("$sign ", revealedNumberWidth, baseline, gutterPaint) }
     // Let Android shape intact text, including surrogate pairs and combining
     // sequences. Canvas clipping avoids a giant Compose text-layout surface.
     clipRect(left = gutterWidth) {
