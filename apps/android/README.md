@@ -31,14 +31,17 @@ three-dot **Chat actions** menu and choose **Review changes**. If the action is
 missing, update the Gateway before reviewing changes on Android.
 The full-screen native viewer loads the same `sessions.diff` snapshot as the web Review panel.
 Close it with Android Back or **Close review**; pulling down does not dismiss it.
-Choose **All changes**, **Uncommitted**, or an available commit from the scope menu.
+Review shows **Uncommitted** changes only. The scope label is static; branch-base
+and historical commit comparisons are outside this Android viewer's scope.
 Tap a file header to collapse it. Line numbers are hidden by default. Start a new
 rightward swipe of at least 64dp with the code already at its left edge to reveal them;
 swipe left at least 64dp to hide them, then start a fresh swipe to pan the code. A swipe that starts away
 from the left edge only pans, even after reaching that edge: lift your finger before swiping again to
 reveal numbers. Addition/deletion markers remain visible.
 Long-press a code line, then drag to select more lines. Release to choose **To
-chat** (append a `path:start-end` reference to your draft without sending it) or
+chat** (append `path:start-end (Before | Uncommitted)` or the corresponding
+After context, followed by all selected text in a fenced
+code block, to your draft without sending it) or
 **Copy** (copy the selected text). A pulse marks the start of selection; a toast
 confirms either action. Drag any of the four selection handles to refine the range before
 choosing an action. Selection stays in one hunk and uses the starting line's

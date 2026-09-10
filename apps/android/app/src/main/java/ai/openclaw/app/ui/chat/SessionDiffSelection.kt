@@ -13,6 +13,9 @@ internal data class SessionDiffSelection(
 ) {
   private fun number(line: SessionDiffLine) = if (before) line.oldLine else line.newLine
 
+  private val path: String
+    get() = if (before) view.file.oldPath ?: view.file.path else view.file.path
+
   fun contains(index: Int): Boolean = index in minOf(anchor, extent)..maxOf(anchor, extent) && number(view.lines[index]) != null
 
   fun extend(index: Int) = copy(extent = index.coerceIn(bounds))
@@ -50,9 +53,23 @@ internal data class SessionDiffSelection(
   val reference: String
     get() {
       val selected = lines
-      val path = if (before) view.file.oldPath ?: view.file.path else view.file.path
       return "$path:${number(selected.first())}-${number(selected.last())}"
     }
+
+  fun chatReference(): String {
+    val side = if (before) "Before" else "After"
+    val code = text
+    // A selected Markdown fence must not close the surrounding code block.
+    val fence = "`".repeat(maxOf(3, (Regex("`+").findAll(code).maxOfOrNull { it.value.length } ?: 0) + 1))
+    val language =
+      path
+        .substringAfterLast('/')
+        .substringAfterLast('.', "")
+        .lowercase()
+        .takeIf { it.matches(Regex("[a-z0-9]+")) }
+        .orEmpty()
+    return "$reference ($side | Uncommitted)\n$fence$language\n$code\n$fence"
+  }
 
   val text: String
     get() = lines.joinToString("\n") { it.text }

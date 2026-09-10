@@ -1819,7 +1819,7 @@ class ChatComposerLayoutTest {
       val request = Json.parseToJsonElement(requireNotNull(calls.single().second)).jsonObject
       assertEquals(JsonPrimitive(sessionKey), request["sessionKey"])
       assertEquals(JsonPrimitive(owner.agentId), request["agentId"])
-      assertEquals(JsonPrimitive("all"), request["scope"])
+      assertEquals(JsonPrimitive("uncommitted"), request["scope"])
       val capture = composeRule.onNode(isDialog()).captureToImage()
       java.io.File("build/outputs/session-diff/review-fullscreen.png").also { file ->
         checkNotNull(file.parentFile).mkdirs()
@@ -1837,7 +1837,7 @@ class ChatComposerLayoutTest {
       composeRule.waitForIdle()
       composeRule.onNode(isDialog()).assertDoesNotExist()
       composeRule.runOnIdle {
-        assertEquals("Keep my draft\nreview-fixture.txt:1-1", model.chatComposerState.textDrafts[owner])
+        assertEquals("Keep my draft\nreview-fixture.txt:1-1 (After | Uncommitted)\n```txt\nSnapshot from the conversation workspace\n```", model.chatComposerState.textDrafts[owner])
         assertEquals(
           "Reference added to chat",
           org.robolectric.shadows.ShadowToast

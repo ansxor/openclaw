@@ -2,7 +2,6 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.SessionDiffCommit
 import ai.openclaw.app.chat.SessionDiffFile
-import ai.openclaw.app.chat.SessionDiffScope
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.ClipboardManager
@@ -17,6 +16,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
@@ -62,7 +62,7 @@ class SessionDiffContentTest {
     val files = prepareSessionDiffFiles(snapshot)
     composeRule.setContent {
       ClawDesignTheme(dark = dark.value) {
-        SessionDiffContent(snapshot, files, false, null, SessionDiffScope.All, null, { _, _ -> }, {}, {}, Modifier.fillMaxSize(), {})
+        SessionDiffContent(snapshot, files, false, null, {}, {}, Modifier.fillMaxSize(), {})
       }
     }
     val evidence = File("build/outputs/session-diff", UUID.randomUUID().toString())
@@ -119,7 +119,7 @@ class SessionDiffContentTest {
     val files = prepareSessionDiffFiles(snapshot)
     composeRule.setContent {
       ClawDesignTheme {
-        SessionDiffContent(snapshot, files, false, null, SessionDiffScope.All, null, { _, _ -> }, {}, {}, Modifier.fillMaxSize(), {})
+        SessionDiffContent(snapshot, files, false, null, {}, {}, Modifier.fillMaxSize(), {})
       }
     }
     val codeLine = composeRule.onNodeWithText(text, substring = true)
@@ -189,10 +189,7 @@ class SessionDiffContentTest {
   }
 
   @Test
-  fun toolbarAndFileActionsRouteScopeCommitRefreshCopyAndClose() {
-    val scope = mutableStateOf(SessionDiffScope.All)
-    val commit = mutableStateOf<String?>(null)
-    val selections = mutableListOf<Pair<SessionDiffScope, String?>>()
+  fun toolbarShowsUncommittedAndRoutesRefreshCopyAndClose() {
     var refreshes = 0
     var closes = 0
     val snapshot = snapshot()
@@ -204,13 +201,6 @@ class SessionDiffContentTest {
           files,
           false,
           null,
-          scope.value,
-          commit.value,
-          { selected, sha ->
-            selections += selected to sha
-            scope.value = selected
-            commit.value = sha
-          },
           { refreshes++ },
           { closes++ },
           Modifier.fillMaxSize(),
@@ -218,10 +208,8 @@ class SessionDiffContentTest {
         )
       }
     }
-    composeRule.onNodeWithText("All changes").performClick()
-    composeRule.onNodeWithText("Uncommitted").performClick()
-    composeRule.onNodeWithText("Uncommitted").performClick()
-    composeRule.onNodeWithText("abc12345 Tune retry count").performClick()
+    composeRule.onNodeWithText("Uncommitted").assertIsDisplayed().assertHasNoClickAction()
+    composeRule.onNodeWithText("All changes").assertDoesNotExist()
     composeRule.onNodeWithContentDescription("Refresh changes").performClick()
     val clipboard = requireNotNull(RuntimeEnvironment.getApplication().getSystemService(ClipboardManager::class.java))
     val previousClip = clipboard.primaryClip
@@ -229,7 +217,6 @@ class SessionDiffContentTest {
       composeRule.onAllNodesWithContentDescription("Copy patch")[0].performClick()
       composeRule.onNodeWithContentDescription("Close review").performClick()
       composeRule.runOnIdle {
-        assertEquals(listOf(SessionDiffScope.Uncommitted to null, SessionDiffScope.Commit to "abc12345def67890"), selections)
         assertEquals(1, refreshes)
         assertEquals(1, closes)
         assertEquals(
@@ -257,9 +244,6 @@ class SessionDiffContentTest {
           emptyList(),
           loading.value,
           error.value,
-          SessionDiffScope.All,
-          null,
-          { _, _ -> },
           { retries++ },
           {},
           Modifier.fillMaxSize(),
@@ -292,9 +276,6 @@ class SessionDiffContentTest {
           files,
           false,
           null,
-          SessionDiffScope.All,
-          null,
-          { _, _ -> },
           {},
           {},
           Modifier.fillMaxSize(),
@@ -424,9 +405,42 @@ class SessionDiffContentTest {
         }
         composeRule.onNodeWithText("To chat").performClick()
       }
-      composeRule.runOnIdle { assertEquals(listOf("src/retry.ts:8-9", "src/retry.ts:8-9"), references) }
+      composeRule.runOnIdle { assertEquals(List(2) { "src/retry.ts:8-9 (After | Uncommitted)\n```ts\nconst retries = 3;\nexport { retries };\n```" }, references) }
     } finally {
       if (previousClip == null) clipboard.clearPrimaryClip() else clipboard.setPrimaryClip(previousClip)
+    }
+  }
+
+  @Test
+  fun referencePreservesReplacementBeforeSide() {
+    val snapshot = snapshot()
+    val files = prepareSessionDiffFiles(snapshot)
+    val references = mutableListOf<String>()
+    composeRule.setContent {
+      ClawDesignTheme {
+        SessionDiffContent(
+          snapshot,
+          files,
+          false,
+          null,
+          {},
+          {},
+          Modifier.fillMaxSize(),
+          { references += it },
+        )
+      }
+    }
+    composeRule.onNodeWithText("− const retries = 1;").performTouchInput {
+      down(center)
+      moveTo(center, delayMillis = 700)
+      up()
+    }
+    composeRule.onNodeWithText("To chat").performClick()
+    composeRule.runOnIdle {
+      assertEquals(
+        listOf("src/retry.ts:8-8 (Before | Uncommitted)\n```ts\nconst retries = 1;\n```"),
+        references,
+      )
     }
   }
 
@@ -449,7 +463,7 @@ class SessionDiffContentTest {
     val dark = mutableStateOf(false)
     composeRule.setContent {
       ClawDesignTheme(dark = dark.value) {
-        SessionDiffContent(snapshot, files, false, null, SessionDiffScope.All, null, { _, _ -> }, {}, {}, Modifier.fillMaxSize().padding(bottom = 200.dp), {})
+        SessionDiffContent(snapshot, files, false, null, {}, {}, Modifier.fillMaxSize().padding(bottom = 200.dp), {})
       }
     }
     val scroller = composeRule.onNode(hasScrollAction())

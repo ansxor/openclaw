@@ -8,8 +8,8 @@ import ai.openclaw.app.chat.SessionDiffScope
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.parseSessionDiffPatch
 import ai.openclaw.app.i18n.nativeString
-import ai.openclaw.app.ui.FoldAwareDropdownMenu
-import ai.openclaw.app.ui.FoldAwareMenuItem
+import ai.openclaw.app.i18n.resolveNativeTextResource
+import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.foldAwareSheet
@@ -49,7 +49,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
@@ -143,8 +142,6 @@ internal fun SessionDiffSheet(
   onDismiss: () -> Unit,
   onReference: (String) -> Unit,
 ) {
-  var selectedScope by remember { mutableStateOf(SessionDiffScope.All) }
-  var selectedCommit by remember { mutableStateOf<String?>(null) }
   var refresh by remember { mutableIntStateOf(0) }
   var snapshot by remember { mutableStateOf<SessionDiffSnapshot?>(null) }
   var files by remember { mutableStateOf<List<SessionDiffFileView>>(emptyList()) }
@@ -153,7 +150,7 @@ internal fun SessionDiffSheet(
 
   fun isCurrent() = !opening.geometry.revoked && viewModel.isCurrentChatComposerOwner(opening.composerOwner)
 
-  LaunchedEffect(opening, selectedScope, selectedCommit, refresh) {
+  LaunchedEffect(opening, refresh) {
     val gatewayRevision = viewModel.gatewayCatalogRevision.value
     loading = true
     error = null
@@ -166,8 +163,7 @@ internal fun SessionDiffSheet(
         viewModel.loadSessionDiff(
           sessionKey = opening.sessionKey,
           agentId = opening.composerOwner.agentId,
-          scope = selectedScope,
-          commit = selectedCommit,
+          scope = SessionDiffScope.Uncommitted,
           expectedGatewayStableId = gateway,
         )
       val prepared = withContext(Dispatchers.Default) { prepareSessionDiffFiles(result) }
@@ -206,14 +202,6 @@ internal fun SessionDiffSheet(
       files = files,
       loading = loading,
       error = error,
-      selectedScope = selectedScope,
-      selectedCommit = selectedCommit,
-      onScope = { scope, commit ->
-        if (admit()) {
-          selectedScope = scope
-          selectedCommit = commit
-        }
-      },
       onRefresh = { if (admit()) refresh++ },
       onClose = onDismiss,
       onReference = { reference -> if (isCurrent() && admit()) onReference(reference) },
@@ -234,23 +222,13 @@ internal fun SessionDiffContent(
   files: List<SessionDiffFileView>,
   loading: Boolean,
   error: String?,
-  selectedScope: SessionDiffScope,
-  selectedCommit: String?,
-  onScope: (SessionDiffScope, String?) -> Unit,
   onRefresh: () -> Unit,
   onClose: () -> Unit,
   modifier: Modifier = Modifier,
   onReference: (String) -> Unit,
 ) {
-  var scopeMenu by remember { mutableStateOf(false) }
   var collapsed by remember { mutableStateOf(emptySet<String>()) }
   var showLineNumbers by remember { mutableStateOf(false) }
-  val scopeLabel =
-    when (selectedScope) {
-      SessionDiffScope.All -> nativeString("All changes")
-      SessionDiffScope.Uncommitted -> nativeString("Uncommitted")
-      SessionDiffScope.Commit -> selectedCommit.orEmpty().take(8)
-    }
   Column(modifier.background(ClawTheme.colors.surface)) {
     Row(
       Modifier.fillMaxWidth().padding(start = ClawTheme.spacing.sm),
@@ -265,24 +243,12 @@ internal fun SessionDiffContent(
       horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      Box {
-        TextButton(onClick = { scopeMenu = true }, enabled = !loading) {
-          Text(scopeLabel, color = ClawTheme.colors.text, style = ClawTheme.type.label)
-          Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = ClawTheme.colors.textMuted)
-        }
-        FoldAwareDropdownMenu(
-          expanded = scopeMenu,
-          onDismissRequest = { scopeMenu = false },
-          items =
-            buildList {
-              add(FoldAwareMenuItem("all", nativeString("All changes"), { onScope(SessionDiffScope.All, null) }))
-              add(FoldAwareMenuItem("uncommitted", nativeString("Uncommitted"), { onScope(SessionDiffScope.Uncommitted, null) }))
-              snapshot?.commits?.forEach { commit ->
-                add(FoldAwareMenuItem(commit.sha, "${commit.sha.take(8)} ${commit.subject}", { onScope(SessionDiffScope.Commit, commit.sha) }))
-              }
-            },
-        )
-      }
+      Text(
+        nativeString("Uncommitted"),
+        color = ClawTheme.colors.text,
+        style = ClawTheme.type.label,
+        modifier = Modifier.padding(horizontal = ClawTheme.spacing.sm, vertical = ClawTheme.spacing.sm),
+      )
       Text(
         snapshot?.branch.orEmpty(),
         style = ClawTheme.type.caption,
@@ -292,8 +258,8 @@ internal fun SessionDiffContent(
         modifier = Modifier.weight(1f),
       )
       snapshot?.let {
-        Text("+${it.additions}", style = ClawTheme.type.mono, color = ClawTheme.colors.success)
-        Text("−${it.deletions}", style = ClawTheme.type.mono, color = ClawTheme.colors.danger)
+        Text(verbatimText("+${it.additions}").resolveNativeTextResource(), style = ClawTheme.type.mono, color = ClawTheme.colors.success)
+        Text(verbatimText("−${it.deletions}").resolveNativeTextResource(), style = ClawTheme.type.mono, color = ClawTheme.colors.danger)
       }
     }
     HorizontalDivider(color = ClawTheme.colors.border)
@@ -320,7 +286,7 @@ internal fun SessionDiffContent(
           showLineNumbers,
           { showLineNumbers = it },
           Modifier.weight(1f),
-          onReference,
+          { selection -> onReference(selection.chatReference()) },
         )
       }
     }
@@ -336,7 +302,7 @@ private fun SessionDiffFiles(
   showLineNumbers: Boolean,
   setLineNumbers: (Boolean) -> Unit,
   modifier: Modifier,
-  onReference: (String) -> Unit,
+  onReference: (SessionDiffSelection) -> Unit,
 ) {
   val context = LocalContext.current
   val density = LocalDensity.current
@@ -369,7 +335,6 @@ private fun SessionDiffFiles(
   val revealedNumberWidth by animateFloatAsState(
     targetValue = if (showLineNumbers) numberWidth else 0f,
     animationSpec = tween(durationMillis = 200),
-    label = "Diff line numbers",
   )
   val gutterWidth = revealedNumberWidth + codePaint.measureText("+ ")
   val contentWidth by produceState(0f, files, codePaint) {
@@ -557,8 +522,8 @@ private fun SessionDiffFiles(
                   )
                 }
               }
-              Text("+${file.additions}", style = ClawTheme.type.caption, color = ClawTheme.colors.success)
-              Text("−${file.deletions}", style = ClawTheme.type.caption, color = ClawTheme.colors.danger)
+              Text(verbatimText("+${file.additions}").resolveNativeTextResource(), style = ClawTheme.type.caption, color = ClawTheme.colors.success)
+              Text(verbatimText("−${file.deletions}").resolveNativeTextResource(), style = ClawTheme.type.caption, color = ClawTheme.colors.danger)
             }
             ClawPlainIconButton(
               Icons.Default.ContentCopy,
@@ -651,7 +616,7 @@ private fun SessionDiffFiles(
           listState,
           onReference = {
             selection = null
-            onReference(selected.reference)
+            onReference(selected)
           },
           onCopy = {
             copyChatText(context, selected.text)
