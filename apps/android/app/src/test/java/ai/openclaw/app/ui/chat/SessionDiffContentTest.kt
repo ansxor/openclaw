@@ -7,7 +7,6 @@ import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.ClipboardManager
 import android.graphics.Bitmap
-import android.view.WindowManager
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.mutableStateOf
@@ -25,7 +24,6 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -36,6 +34,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -46,9 +45,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowToast
-import org.robolectric.shadows.ShadowWindowManagerImpl
 import java.io.File
 import java.util.UUID
 
@@ -84,12 +81,16 @@ class SessionDiffContentTest {
       composeRule.onNodeWithText("+ const retries = 3;").assertIsDisplayed()
       capture(File(evidence, "review-$theme-hidden.png"))
       addedLine.performTouchInput { click() }
+      addedLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
+      addedLine.performTouchInput { swipeRight() }
       addedLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers shown"))
       composeRule.onNodeWithText(" 8 + const retries = 3;").assertIsDisplayed()
-      // One tap reveals the gutters throughout the viewer, including other files.
+      // A fresh rightward edge swipe reveals gutters throughout the viewer.
       composeRule.onNodeWithText(" 1 + export const ready = true;").assertIsDisplayed()
       capture(File(evidence, "review-$theme-shown.png"))
       addedLine.performTouchInput { click() }
+      addedLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers shown"))
+      addedLine.performTouchInput { swipeLeft() }
       addedLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
       composeRule.onNodeWithText("+ export const ready = true;").assertIsDisplayed()
 
@@ -106,9 +107,8 @@ class SessionDiffContentTest {
 
   @Test
   fun wideUnicodeLineCanScrollToItsEndWithoutDependingOnAsciiCharacterWidth() {
-    // At 360dp these 22 UTF-16 units fit an ASCII-cell estimate but the actual
-    // CJK and emoji glyphs exceed the code viewport beside the fixed gutter.
-    val text = "你好世界".repeat(5) + "🙂"
+    // Wide Unicode glyphs overflow even with the numeric gutters hidden.
+    val text = "你好世界".repeat(10) + "🙂"
     val snapshot =
       SessionDiffSnapshot(
         sessionKey = "unicode-review",
@@ -123,25 +123,69 @@ class SessionDiffContentTest {
       }
     }
     val codeLine = composeRule.onNodeWithText(text, substring = true)
-    codeLine.performTouchInput { click() }
+    // Brief horizontal nudges must not open or close the gutters.
+    codeLine.performTouchInput {
+      down(center)
+      moveTo(Offset(centerX + 40f, centerY), delayMillis = 100)
+      up()
+    }
+    codeLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
+    codeLine.performTouchInput { swipeRight() }
+    codeLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers shown"))
     val scroller = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange))
     composeRule.waitForIdle()
     val before = scroller.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange]
     assertTrue("Wide glyphs must expose their overflow instead of clipping permanently", before.maxValue() > 0f)
     assertEquals(0f, before.value(), 0.01f)
-    codeLine.performTouchInput { swipeLeft() }
+    codeLine.performTouchInput {
+      down(center)
+      moveTo(Offset(centerX - 40f, centerY), delayMillis = 100)
+      up()
+    }
+    codeLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers shown"))
+    assertEquals("A short hide gesture must not pan content", 0f, before.value(), 0.01f)
+    // Hiding owns the whole pointer sequence, including continued movement and reversal.
+    codeLine.performTouchInput {
+      down(Offset(centerX, centerY))
+      moveTo(Offset(centerX - 60f, centerY), delayMillis = 100)
+      moveTo(Offset(centerX - 100f, centerY), delayMillis = 100)
+      moveTo(Offset(centerX + 60f, centerY), delayMillis = 100)
+      moveTo(Offset(centerX - 120f, centerY), delayMillis = 100)
+      up()
+    }
+    composeRule.waitForIdle()
+    assertEquals("The hiding swipe must not pan content", 0f, before.value(), 0.01f)
+    codeLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
+    // A fresh pan remains responsive without the larger gutter threshold.
+    codeLine.performTouchInput {
+      down(center)
+      moveTo(Offset(centerX - 40f, centerY), delayMillis = 100)
+      up()
+    }
     composeRule.waitForIdle()
     val after = scroller.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange]
     assertTrue("A horizontal gesture must reveal the rest of the Unicode line", after.value() > 0f)
     assertTrue(after.value() <= after.maxValue())
     codeLine.assertIsDisplayed()
-    codeLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers shown"))
-    // Hiding gutters widens the code viewport and must clamp any previous pan.
-    codeLine.performTouchInput { click() }
-    composeRule.waitForIdle()
-    val hidden = scroller.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange]
-    assertTrue(hidden.value() <= hidden.maxValue())
     codeLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
+    // Returning from a pan must not reveal numbers, even after reaching the edge.
+    codeLine.performTouchInput { swipeRight(durationMillis = 600) }
+    composeRule.waitForIdle()
+    val returned = scroller.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange]
+    assertEquals(0f, returned.value(), 0.01f)
+    codeLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
+    // Reversing a leftward pan within the same pointer sequence cannot re-arm reveal.
+    codeLine.performTouchInput {
+      down(Offset(centerX, centerY))
+      moveTo(Offset(centerX - 90f, centerY), delayMillis = 100)
+      moveTo(Offset(centerX + 100f, centerY), delayMillis = 100)
+      up()
+    }
+    composeRule.waitForIdle()
+    assertEquals(0f, returned.value(), 0.01f)
+    codeLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
+    codeLine.performTouchInput { swipeRight() }
+    codeLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers shown"))
   }
 
   @Test
@@ -278,6 +322,10 @@ class SessionDiffContentTest {
       for (isDark in listOf(false, true)) {
         composeRule.runOnIdle { dark.value = isDark }
         val theme = if (isDark) "dark" else "light"
+        // Disclosure replaces selection state; cancellation must target the new state.
+        val header = composeRule.onNodeWithText("src/retry.ts")
+        header.performClick()
+        header.performClick()
         val line = composeRule.onNodeWithText("+ const retries = 3;", substring = true)
         line.performTouchInput {
           down(center)
@@ -327,7 +375,7 @@ class SessionDiffContentTest {
         startHandle.performTouchInput { up() }
         assertHandles(finalized = true)
         line.assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
-        for ((name, matcher) in listOf("selection" to (isRoot() and hasAnyDescendant(hasText("Review changes"))), "actions" to isPopup())) {
+        for ((name, matcher) in listOf("selection" to (isRoot() and hasAnyDescendant(hasText("Review changes"))), "actions" to SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "Selection actions"))) {
           File(evidence, "$name-$theme.png").outputStream().use {
             composeRule
               .onNode(matcher)
@@ -336,7 +384,7 @@ class SessionDiffContentTest {
               .compress(Bitmap.CompressFormat.PNG, 100, it)
           }
         }
-        composeRule.onNodeWithText("Copy").performClick()
+        composeRule.onNodeWithText("Copy").performTouchInput { click() }
         composeRule.runOnIdle {
           assertEquals(
             "export { retries };\n// 你好世界 · ready 🙂",
@@ -416,22 +464,31 @@ class SessionDiffContentTest {
 
     fun popupTop(): Float {
       composeRule.waitForIdle()
-      val manager = RuntimeEnvironment.getApplication().getSystemService(WindowManager::class.java)
-      val windows = Shadow.extract<ShadowWindowManagerImpl>(manager).views
-      return windows
-        .map { it.layoutParams as WindowManager.LayoutParams }
-        .single { it.type == WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL }
-        .y
-        .toFloat()
+      return composeRule
+        .onNode(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "Selection actions"))
+        .fetchSemanticsNode()
+        .positionInWindow.y
     }
 
     fun anchorGap(): Float {
       val selected = line.fetchSemanticsNode()
       return popupTop() - (selected.positionInWindow.y + selected.size.height)
     }
+    composeRule
+      .onNode(isRoot() and hasAnyDescendant(hasText("Review changes")))
+      .assert(hasAnyDescendant(hasText("To chat")))
     val initialTop = popupTop()
     val initialGap = anchorGap()
     assertEquals(8f, initialGap, 1f)
+    scroller.performTouchInput {
+      down(Offset(width - 60f, 200f))
+      moveTo(Offset(width - 60f, 180f), delayMillis = 150)
+      moveTo(Offset(width - 60f, 160f), delayMillis = 150)
+      moveTo(Offset(width - 60f, 146f), delayMillis = 150)
+      up()
+    }
+    assertTrue("Scrolling outside the inline actions must still move code", popupTop() < initialTop)
+    assertEquals(initialGap, anchorGap(), 1f)
     scroller.performScrollToIndex(18)
     val scrolledUpTop = popupTop()
     assertTrue("Popup must follow the selection upward", scrolledUpTop < initialTop)
@@ -443,7 +500,7 @@ class SessionDiffContentTest {
     val selectedTop = line.fetchSemanticsNode().positionInWindow.y
     val popupHeight =
       composeRule
-        .onNode(isPopup())
+        .onNode(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "Selection actions"))
         .fetchSemanticsNode()
         .size.height
     assertEquals("Bottom overflow must place actions above selection", selectedTop - 8f - popupHeight, popupTop(), 1f)
@@ -475,7 +532,7 @@ class SessionDiffContentTest {
     for (isDark in listOf(false, true)) {
       composeRule.runOnIdle { dark.value = isDark }
       val theme = if (isDark) "dark" else "light"
-      for ((name, matcher) in listOf("above" to (isRoot() and hasAnyDescendant(hasText("Review changes"))), "actions" to isPopup())) {
+      for ((name, matcher) in listOf("above" to (isRoot() and hasAnyDescendant(hasText("Review changes"))), "actions" to SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "Selection actions"))) {
         File(evidence, "$name-$theme.png").outputStream().use {
           composeRule
             .onNode(matcher)

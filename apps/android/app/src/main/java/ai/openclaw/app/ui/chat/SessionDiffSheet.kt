@@ -45,6 +45,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -63,6 +64,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -78,12 +80,12 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -95,6 +97,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.horizontalScrollAxisRange
 import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -102,20 +105,15 @@ import androidx.compose.ui.semantics.text
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntRect
-import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupPositionProvider
-import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 
 private data class SessionDiffRowKey(
   val path: String,
@@ -320,7 +318,7 @@ internal fun SessionDiffContent(
           collapsed,
           { path -> collapsed = if (path in collapsed) collapsed - path else collapsed + path },
           showLineNumbers,
-          { showLineNumbers = !showLineNumbers },
+          { showLineNumbers = it },
           Modifier.weight(1f),
           onReference,
         )
@@ -336,7 +334,7 @@ private fun SessionDiffFiles(
   collapsed: Set<String>,
   toggle: (String) -> Unit,
   showLineNumbers: Boolean,
-  toggleLineNumbers: () -> Unit,
+  setLineNumbers: (Boolean) -> Unit,
   modifier: Modifier,
   onReference: (String) -> Unit,
 ) {
@@ -385,6 +383,7 @@ private fun SessionDiffFiles(
   }
   var viewportWidth by remember { mutableIntStateOf(0) }
   var horizontalOffset by remember(files) { mutableFloatStateOf(0f) }
+  val currentShowLineNumbers by androidx.compose.runtime.rememberUpdatedState(showLineNumbers)
   val maxOffset = (contentWidth - (viewportWidth - gutterWidth).coerceAtLeast(0f)).coerceAtLeast(0f)
   val horizontalScroll =
     rememberScrollableState { delta ->
@@ -427,7 +426,7 @@ private fun SessionDiffFiles(
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
   }
   Box(
-    modifier.pointerInput(files) {
+    modifier.pointerInput(files, collapsed) {
       awaitEachGesture {
         awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
         if (waitForUpOrCancellation(PointerEventPass.Final) != null) selection = null
@@ -438,6 +437,46 @@ private fun SessionDiffFiles(
       Modifier
         .fillMaxSize()
         .pointerInput(files, collapsed) {
+          awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            // Eligibility belongs to pointer-down, never to reaching the edge mid-pan.
+            val canReveal = horizontalOffset == 0f
+            val canHide = currentShowLineNumbers
+            val gutterSwipeDistance = 64.dp.toPx()
+            var gutterTarget: Boolean? = null
+            var changedGutters = false
+            while (true) {
+              val event = awaitPointerEvent(PointerEventPass.Initial)
+              val change = event.changes.firstOrNull { it.id == down.id } ?: break
+              if (change.isConsumed || selecting) break
+              val distance = change.position - down.position
+              if (gutterTarget == null) {
+                if (abs(distance.x) > viewConfiguration.touchSlop && abs(distance.x) > abs(distance.y)) {
+                  if (distance.x < 0f) {
+                    if (!canHide) break
+                    gutterTarget = false
+                  } else {
+                    if (!canReveal) break
+                    gutterTarget = true
+                  }
+                } else if (abs(distance.y) > viewConfiguration.touchSlop) {
+                  break
+                }
+              }
+              gutterTarget?.let { target ->
+                // Claim at touch slop so panning cannot steal a pending gutter swipe,
+                // but require deliberate travel before changing visibility.
+                change.consume()
+                val directedDistance = if (target) distance.x else -distance.x
+                if (!changedGutters && directedDistance >= gutterSwipeDistance) {
+                  setLineNumbers(target)
+                  changedGutters = true
+                }
+              }
+              if (!change.pressed) break
+            }
+          }
+        }.pointerInput(files, collapsed) {
           awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
             val (view, index) = lineAt(down.position) ?: return@awaitEachGesture
@@ -545,9 +584,7 @@ private fun SessionDiffFiles(
               revealedNumberWidth,
               gutterWidth,
               showLineNumbers,
-              {
-                if (selection != null) selection = null else toggleLineNumbers()
-              },
+              { setLineNumbers(!showLineNumbers) },
               selection?.let { it.view === view && it.contains(index) } == true,
               pulse.value,
               {
@@ -598,26 +635,20 @@ private fun SessionDiffFiles(
       }
     }
     selection?.takeIf { !selecting }?.let { selected ->
-      val layout = listState.layoutInfo
-      val intersectsViewport =
-        layout.visibleItemsInfo.any { item ->
-          val key = item.key as? SessionDiffRowKey
-          key?.path == selected.view.file.path && selected.contains(key.index) &&
-            item.offset < layout.viewportEndOffset && item.offset + item.size > layout.viewportStartOffset
+      val intersectsViewport by remember(selected, listState) {
+        derivedStateOf {
+          val layout = listState.layoutInfo
+          layout.visibleItemsInfo.any { item ->
+            val key = item.key as? SessionDiffRowKey
+            key?.path == selected.view.file.path && selected.contains(key.index) &&
+              item.offset < layout.viewportEndOffset && item.offset + item.size > layout.viewportStartOffset
+          }
         }
-      // Lazy layout can omit either endpoint while the selection still crosses
-      // the viewport. An absent end is below it, so placement must flip above.
+      }
       if (intersectsViewport) {
-        val lastRow = layout.visibleItemsInfo.firstOrNull { it.key == SessionDiffRowKey(selected.view.file.path, selected.lastIndex) }
-        val bottom = lastRow?.let { it.offset + it.size } ?: layout.viewportEndOffset
         SessionDiffSelectionMenu(
-          Offset(viewportWidth / 2f, bottom.toFloat()),
-          selectionTop =
-            layout.visibleItemsInfo.firstOrNull { it.key == SessionDiffRowKey(selected.view.file.path, selected.firstIndex) }?.offset
-              ?: layout.viewportStartOffset,
-          viewportTop = layout.viewportStartOffset,
-          viewportBottom = layout.viewportEndOffset,
-          onDismiss = { selection = null },
+          selected,
+          listState,
           onReference = {
             selection = null
             onReference(selected.reference)
@@ -699,63 +730,55 @@ private fun SessionDiffSelectionHandle(
 
 @Composable
 private fun SessionDiffSelectionMenu(
-  position: Offset,
-  selectionTop: Int,
-  viewportTop: Int,
-  viewportBottom: Int,
-  onDismiss: () -> Unit,
+  selection: SessionDiffSelection,
+  listState: LazyListState,
   onReference: () -> Unit,
   onCopy: () -> Unit,
 ) {
   val gap = with(LocalDensity.current) { 8.dp.roundToPx() }
-  var above by remember { mutableStateOf(false) }
-  val placement =
-    remember(position, selectionTop, viewportTop, viewportBottom, gap) {
-      object : PopupPositionProvider {
-        override fun calculatePosition(
-          anchorBounds: IntRect,
-          windowSize: IntSize,
-          layoutDirection: LayoutDirection,
-          popupContentSize: IntSize,
-        ): IntOffset {
-          val x =
-            (anchorBounds.left + position.x.toInt() - popupContentSize.width / 2)
-              .coerceIn(gap, (windowSize.width - popupContentSize.width - gap).coerceAtLeast(gap))
-          val below = position.y.toInt() + gap
-          above = below + popupContentSize.height > viewportBottom
-          // Bound to Review, not the window: toolbars/insets are not code space.
-          // A selection taller than the viewport has no outside space; keep its
-          // actions visible at the viewport's top in that case.
-          val y = if (above) (selectionTop - gap - popupContentSize.height).coerceAtLeast(viewportTop) else below
-          return IntOffset(x, anchorBounds.top + y)
-        }
-      }
-    }
   val expansion = remember { Animatable(0f) }
   LaunchedEffect(Unit) { expansion.animateTo(1f, tween(200)) }
-  Popup(popupPositionProvider = placement, onDismissRequest = onDismiss, properties = PopupProperties(focusable = false, dismissOnClickOutside = false, clippingEnabled = false)) {
-    Surface(
-      modifier =
-        Modifier.graphicsLayer {
-          scaleX = expansion.value
-          scaleY = expansion.value
-          transformOrigin = TransformOrigin(0.5f, if (above) 1f else 0f)
-        },
-      color = ClawTheme.colors.surfaceRaised,
-      shape =
-        androidx.compose.foundation.shape
-          .RoundedCornerShape(12.dp),
-      shadowElevation = 6.dp,
-    ) {
-      Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-        TextButton(onClick = onReference) {
-          Icon(Icons.Default.ChatBubbleOutline, null, Modifier.size(16.dp))
-          Text(nativeString("To chat"), Modifier.padding(start = 6.dp))
-        }
-        TextButton(onClick = onCopy) {
-          Icon(Icons.Default.ContentCopy, null, Modifier.size(16.dp))
-          Text(nativeString("Copy"), Modifier.padding(start = 6.dp))
-        }
+  Surface(
+    modifier =
+      Modifier
+        .layout { measurable, constraints ->
+          val menu = measurable.measure(constraints.copy(minWidth = 0, minHeight = 0))
+          layout(constraints.maxWidth, constraints.maxHeight) {
+            // Read scrolling geometry during placement in the same Compose
+            // tree as the code, not through a separately updated popup window.
+            val viewport = listState.layoutInfo
+            val rows = viewport.visibleItemsInfo
+            val top =
+              rows.firstOrNull { it.key == SessionDiffRowKey(selection.view.file.path, selection.firstIndex) }?.offset
+                ?: viewport.viewportStartOffset
+            val bottom =
+              rows
+                .firstOrNull { it.key == SessionDiffRowKey(selection.view.file.path, selection.lastIndex) }
+                ?.let { it.offset + it.size } ?: viewport.viewportEndOffset
+            val above = bottom + gap + menu.height > viewport.viewportEndOffset
+            val y = if (above) (top - gap - menu.height).coerceAtLeast(viewport.viewportStartOffset) else bottom + gap
+            val x = (constraints.maxWidth - menu.width) / 2
+            menu.placeWithLayer(x, y) {
+              scaleX = expansion.value
+              scaleY = expansion.value
+              transformOrigin = TransformOrigin(0.5f, if (above) 1f else 0f)
+            }
+          }
+        }.semantics { paneTitle = nativeString("Selection actions") },
+    color = ClawTheme.colors.surfaceRaised,
+    shape =
+      androidx.compose.foundation.shape
+        .RoundedCornerShape(12.dp),
+    shadowElevation = 6.dp,
+  ) {
+    Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+      TextButton(onClick = onReference) {
+        Icon(Icons.Default.ChatBubbleOutline, null, Modifier.size(16.dp))
+        Text(nativeString("To chat"), Modifier.padding(start = 6.dp))
+      }
+      TextButton(onClick = onCopy) {
+        Icon(Icons.Default.ContentCopy, null, Modifier.size(16.dp))
+        Text(nativeString("Copy"), Modifier.padding(start = 6.dp))
       }
     }
   }
@@ -798,8 +821,14 @@ private fun SessionDiffCodeRow(
     Modifier
       .fillMaxWidth()
       .height(rowHeight)
-      .clickable(interactionSource = null, indication = null, onClickLabel = toggleLabel, onClick = toggleLineNumbers)
       .semantics {
+        customActions =
+          listOf(
+            CustomAccessibilityAction(toggleLabel) {
+              toggleLineNumbers()
+              true
+            },
+          )
         selected = isSelected
         if (line.oldLine != null || line.newLine != null) {
           onLongClick(label = nativeString("Select lines")) {
