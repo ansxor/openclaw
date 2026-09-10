@@ -26,7 +26,9 @@ Long-press a row on the **Threads** page and choose **Color**, then select a swa
 
 ## Review changes
 
-Open a conversation's three-dot **Chat actions** menu and choose **Review changes**.
+When the connected Gateway advertises `sessions.diff`, open a conversation's
+three-dot **Chat actions** menu and choose **Review changes**. If the action is
+missing, update the Gateway before reviewing changes on Android.
 The full-screen native viewer loads the same `sessions.diff` snapshot as the web Review panel.
 Close it with Android Back or **Close review**; pulling down does not dismiss it.
 Choose **All changes**, **Uncommitted**, or an available commit from the scope menu.

@@ -1748,6 +1748,13 @@ class ChatComposerLayoutTest {
       GatewayRegistryEntry(stableId = AndroidScreenshotFixture.gatewayId, kind = GatewayRegistryEntryKind.MANUAL, name = "Review fixture"),
     )
     prefs.gatewayRegistry.setActive(AndroidScreenshotFixture.gatewayId)
+    @Suppress("UNCHECKED_CAST")
+    val diffAvailable =
+      NodeRuntime::class.java
+        .getDeclaredField("_sessionDiffAvailable")
+        .apply { isAccessible = true }
+        .get(runtime) as MutableStateFlow<Boolean>
+    diffAvailable.value = true
     val model = showChat(viewportWidth = 720.dp, viewportHeight = { 720.dp })
     val owner = model.captureChatShareOwner()
     val sessionKey = controller.sessionKey.value

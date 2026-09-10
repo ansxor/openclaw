@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.SessionDiffFile
 import ai.openclaw.app.chat.SessionDiffScope
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.ui.design.ClawDesignTheme
+import android.content.ClipboardManager
 import android.graphics.Bitmap
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.mutableStateOf
@@ -17,6 +18,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -29,6 +31,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
@@ -105,7 +108,7 @@ class SessionDiffContentTest {
   }
 
   @Test
-  fun toolbarRoutesScopeCommitRefreshAndCloseWithoutMutatingSnapshot() {
+  fun toolbarAndFileActionsRouteScopeCommitRefreshCopyAndClose() {
     val scope = mutableStateOf(SessionDiffScope.All)
     val commit = mutableStateOf<String?>(null)
     val selections = mutableListOf<Pair<SessionDiffScope, String?>>()
@@ -138,11 +141,25 @@ class SessionDiffContentTest {
     composeRule.onNodeWithText("Uncommitted").performClick()
     composeRule.onNodeWithText("abc12345 Tune retry count").performClick()
     composeRule.onNodeWithContentDescription("Refresh changes").performClick()
-    composeRule.onNodeWithContentDescription("Close review").performClick()
-    composeRule.runOnIdle {
-      assertEquals(listOf(SessionDiffScope.Uncommitted to null, SessionDiffScope.Commit to "abc12345def67890"), selections)
-      assertEquals(1, refreshes)
-      assertEquals(1, closes)
+    val clipboard = requireNotNull(RuntimeEnvironment.getApplication().getSystemService(ClipboardManager::class.java))
+    val previousClip = clipboard.primaryClip
+    try {
+      composeRule.onAllNodesWithContentDescription("Copy patch")[0].performClick()
+      composeRule.onNodeWithContentDescription("Close review").performClick()
+      composeRule.runOnIdle {
+        assertEquals(listOf(SessionDiffScope.Uncommitted to null, SessionDiffScope.Commit to "abc12345def67890"), selections)
+        assertEquals(1, refreshes)
+        assertEquals(1, closes)
+        assertEquals(
+          snapshot.files.first().patch,
+          clipboard.primaryClip
+            ?.getItemAt(0)
+            ?.text
+            ?.toString(),
+        )
+      }
+    } finally {
+      if (previousClip == null) clipboard.clearPrimaryClip() else clipboard.setPrimaryClip(previousClip)
     }
   }
 

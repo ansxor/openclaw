@@ -359,6 +359,7 @@ internal fun ChatScreen(
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val selectionGeneration by viewModel.chatSelectionGeneration.collectAsState()
   val gatewayCatalogRevision by viewModel.gatewayCatalogRevision.collectAsState()
+  val sessionDiffAvailable by viewModel.sessionDiffAvailable.collectAsState()
   val sessionOwnerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
   val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
@@ -885,6 +886,7 @@ internal fun ChatScreen(
       sessionCreating = sessionCreating,
       newChatEnabled = newChatEnabled,
       workspaceGit = workspaceGit,
+      sessionDiffAvailable = sessionDiffAvailable,
       branches = sessionBranches,
       branchSwitchEnabled = viewModel.isCurrentChatBranchTarget(composerOwner, selectionGeneration),
       onNewChatInWorktree = {
@@ -1377,6 +1379,7 @@ private fun ChatHeader(
   sessionCreating: Boolean,
   newChatEnabled: Boolean,
   workspaceGit: Boolean,
+  sessionDiffAvailable: Boolean,
   branches: List<SessionBranch>,
   branchSwitchEnabled: Boolean,
   onNewChatInWorktree: () -> Unit,
@@ -1525,7 +1528,9 @@ private fun ChatHeader(
                   ),
                 )
               }
-              add(FoldAwareMenuItem("review-diff", nativeString("Review changes"), onOpenReviewDiff, Icons.Default.Difference))
+              if (sessionDiffAvailable) {
+                add(FoldAwareMenuItem("review-diff", nativeString("Review changes"), onOpenReviewDiff, Icons.Default.Difference))
+              }
               add(FoldAwareMenuItem("dashboard", nativeString("Dashboard"), onOpenDashboard, Icons.Default.Dashboard))
               add(FoldAwareMenuItem("background", nativeString("Background tasks"), onOpenBackgroundTasks, Icons.Default.HourglassEmpty))
               if (workspaceGit) {

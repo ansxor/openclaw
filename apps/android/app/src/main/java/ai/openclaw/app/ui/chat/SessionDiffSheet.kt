@@ -13,7 +13,6 @@ import ai.openclaw.app.ui.FoldAwareMenuItem
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.foldAwareSheet
-import android.content.ClipData
 import android.graphics.Paint
 import android.graphics.Typeface
 import androidx.compose.foundation.Canvas
@@ -57,7 +56,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,8 +64,7 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.ClipEntry
-import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.ScrollAxisRange
@@ -84,7 +81,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 internal data class SessionDiffFileView(
@@ -121,6 +117,7 @@ internal fun SessionDiffSheet(
   fun isCurrent() = !opening.geometry.revoked && viewModel.isCurrentChatComposerOwner(opening.composerOwner)
 
   LaunchedEffect(opening, selectedScope, selectedCommit, refresh) {
+    val gatewayRevision = viewModel.gatewayCatalogRevision.value
     loading = true
     error = null
     snapshot = null
@@ -137,9 +134,11 @@ internal fun SessionDiffSheet(
           expectedGatewayStableId = gateway,
         )
       val prepared = withContext(Dispatchers.Default) { prepareSessionDiffFiles(result) }
-      if (isCurrent()) {
+      if (isCurrent() && viewModel.gatewayCatalogRevision.value == gatewayRevision) {
         snapshot = result
         files = prepared
+      } else if (isCurrent()) {
+        error = nativeString("The connection changed. Refresh to load a new snapshot.")
       }
     } catch (failure: Exception) {
       currentCoroutineContext().ensureActive()
@@ -289,8 +288,7 @@ private fun SessionDiffFiles(
   toggle: (String) -> Unit,
   modifier: Modifier,
 ) {
-  val clipboard = LocalClipboard.current
-  val copyScope = rememberCoroutineScope()
+  val context = LocalContext.current
   val density = LocalDensity.current
   val monoStyle = ClawTheme.type.mono
   val codeColor = ClawTheme.colors.codeText
@@ -303,7 +301,21 @@ private fun SessionDiffFiles(
         color = codeColor.toArgb()
       }
     }
-  val gutterWidth = remember(codePaint) { codePaint.measureText("00000 00000 + ") }
+  val gutterDigits =
+    remember(files) {
+      maxOf(
+        5,
+        files.maxOfOrNull { view ->
+          view.lines.maxOfOrNull { line ->
+            maxOf(line.oldLine?.toString()?.length ?: 0, line.newLine?.toString()?.length ?: 0)
+          } ?: 0
+        } ?: 0,
+      )
+    }
+  val gutterWidth =
+    remember(codePaint, gutterDigits) {
+      codePaint.measureText("${"0".repeat(gutterDigits)} ${"0".repeat(gutterDigits)} + ")
+    }
   val contentWidth by produceState(0f, files, codePaint) {
     // Use the same native shaping for scroll bounds and drawing: Unicode glyphs
     // need not occupy one ASCII cell, even with a monospace primary typeface.
@@ -381,7 +393,7 @@ private fun SessionDiffFiles(
           ClawPlainIconButton(
             Icons.Default.ContentCopy,
             nativeString("Copy patch"),
-            { file.patch?.let { patch -> copyScope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Patch", patch))) } } },
+            { file.patch?.let { patch -> copyChatText(context, patch) } },
             enabled = file.patch != null,
           )
         }
@@ -393,7 +405,7 @@ private fun SessionDiffFiles(
           }
         }
         itemsIndexed(view.lines, key = { index, _ -> "line:${file.path}:$index" }, contentType = { _, _ -> "line" }) { _, line ->
-          SessionDiffCodeRow(line, horizontalOffset, codePaint, gutterWidth)
+          SessionDiffCodeRow(line, horizontalOffset, codePaint, gutterDigits, gutterWidth)
         }
         if (file.truncated) item(key = "truncated:${file.path}") { DiffNotice(nativeString("This file’s patch was truncated.")) }
       }
@@ -411,6 +423,7 @@ private fun SessionDiffCodeRow(
   line: SessionDiffLine,
   offset: Float,
   codePaint: Paint,
+  gutterDigits: Int,
   gutterWidth: Float,
 ) {
   val colors = ClawTheme.colors
@@ -438,7 +451,9 @@ private fun SessionDiffCodeRow(
       }
     drawRect(colors.codeBg)
     drawRect(background)
-    val gutter = "${line.oldLine?.toString().orEmpty().padStart(5)} ${line.newLine?.toString().orEmpty().padStart(5)} $sign "
+    val gutter =
+      "${line.oldLine?.toString().orEmpty().padStart(gutterDigits)} " +
+        "${line.newLine?.toString().orEmpty().padStart(gutterDigits)} $sign "
     val baseline = (size.height - codePaint.fontMetrics.bottom - codePaint.fontMetrics.top) / 2f
     drawIntoCanvas { it.nativeCanvas.drawText(gutter, 0f, baseline, gutterPaint) }
     // Let Android shape intact text, including surrogate pairs and combining
