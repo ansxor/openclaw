@@ -34,8 +34,8 @@ class SessionDiffTest {
     assertTrue(snapshot.files.single().truncated)
     assertEquals("old.png", snapshot.files.single().oldPath)
     assertNull(snapshot.files.single().patch)
-    assertEquals("Rename asset", snapshot.commits.single().subject)
-    assertEquals("def456", snapshot.mergeBase?.sha)
+    assertEquals("feature", snapshot.branch)
+    assertEquals("renamed", snapshot.files.single().status)
   }
 
   @Test(expected = SerializationException::class)

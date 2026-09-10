@@ -1,13 +1,14 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.chat.SessionDiffScope
 import ai.openclaw.app.gateway.GatewayEndpoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -23,8 +24,15 @@ class SessionDiffRuntimeTest {
   private val sessionKey = "agent:coder:review-session"
   private val snapshot = """{"sessionKey":"$sessionKey","files":[],"additions":0,"deletions":0}"""
 
+  private var runtimeForCleanup: NodeRuntime? = null
+
+  @After
+  fun tearDown() {
+    runtimeForCleanup?.let(::closeNodeRuntimeTestFixture)
+  }
+
   @Test
-  fun requestKeepsConversationOwnerAndSelectedCommit() =
+  fun requestKeepsConversationOwnerAndUncommittedScope() =
     runBlocking {
       val runtime = createRuntime()
       runtime.gatewayDataRequestOverrideForTests = { gatewayId, method, params ->
@@ -33,13 +41,13 @@ class SessionDiffRuntimeTest {
         val request = Json.parseToJsonElement(requireNotNull(params)).jsonObject
         assertEquals(sessionKey, request["sessionKey"]?.jsonPrimitive?.content)
         assertEquals("coder", request["agentId"]?.jsonPrimitive?.content)
-        assertEquals("commit", request["scope"]?.jsonPrimitive?.content)
-        assertEquals("abc123", request["commit"]?.jsonPrimitive?.content)
+        assertEquals("uncommitted", request["scope"]?.jsonPrimitive?.content)
+        assertFalse(request.containsKey("commit"))
         snapshot
       }
       assertEquals(
         sessionKey,
-        runtime.loadSessionDiff(sessionKey, "coder", SessionDiffScope.Commit, "abc123", endpoint.stableId).sessionKey,
+        runtime.loadSessionDiff(sessionKey, "coder", endpoint.stableId).sessionKey,
       )
     }
 
@@ -48,7 +56,7 @@ class SessionDiffRuntimeTest {
     val runtime = createRuntime()
     runtime.gatewayDataRequestOverrideForTests = { _, _, _ -> error("must not request another gateway") }
     assertThrows(CancellationException::class.java) {
-      runBlocking { runtime.loadSessionDiff(sessionKey, "coder", SessionDiffScope.All, expectedGatewayStableId = "other") }
+      runBlocking { runtime.loadSessionDiff(sessionKey, "coder", expectedGatewayStableId = "other") }
     }
   }
 
@@ -61,7 +69,7 @@ class SessionDiffRuntimeTest {
     }
     assertThrows(CancellationException::class.java) {
       runBlocking {
-        runtime.loadSessionDiff(sessionKey, "coder", SessionDiffScope.All, expectedGatewayStableId = endpoint.stableId)
+        runtime.loadSessionDiff(sessionKey, "coder", expectedGatewayStableId = endpoint.stableId)
       }
     }
   }
@@ -72,7 +80,7 @@ class SessionDiffRuntimeTest {
     runtime.gatewayDataRequestOverrideForTests = { _, _, _ -> snapshot.replace(sessionKey, "agent:other:session") }
     assertThrows(IllegalStateException::class.java) {
       runBlocking {
-        runtime.loadSessionDiff(sessionKey, "coder", SessionDiffScope.All, expectedGatewayStableId = endpoint.stableId)
+        runtime.loadSessionDiff(sessionKey, "coder", expectedGatewayStableId = endpoint.stableId)
       }
     }
   }
@@ -81,6 +89,7 @@ class SessionDiffRuntimeTest {
     val app = RuntimeEnvironment.getApplication()
     val prefs = app.getSharedPreferences("openclaw.diff.test.${UUID.randomUUID()}", android.content.Context.MODE_PRIVATE)
     return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = prefs)).also {
+      runtimeForCleanup = it
       setField(it, "connectedEndpoint", endpoint)
     }
   }

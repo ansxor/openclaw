@@ -68,7 +68,6 @@ import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.AbstractComposeView
@@ -1820,13 +1819,7 @@ class ChatComposerLayoutTest {
       assertEquals(JsonPrimitive(sessionKey), request["sessionKey"])
       assertEquals(JsonPrimitive(owner.agentId), request["agentId"])
       assertEquals(JsonPrimitive("uncommitted"), request["scope"])
-      val capture = composeRule.onNode(isDialog()).captureToImage()
-      java.io.File("build/outputs/session-diff/review-fullscreen.png").also { file ->
-        checkNotNull(file.parentFile).mkdirs()
-        file.outputStream().use { stream ->
-          capture.asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)
-        }
-      }
+      composeRule.waitForIdle()
       composeRule.runOnIdle { model.chatComposerState.textDrafts[owner] = "Keep my draft" }
       composeRule.onNodeWithText("Snapshot from the conversation workspace", substring = true).performTouchInput {
         down(center)

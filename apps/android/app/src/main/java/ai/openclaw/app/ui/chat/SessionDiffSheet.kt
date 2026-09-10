@@ -4,7 +4,6 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.SessionDiffFile
 import ai.openclaw.app.chat.SessionDiffLine
 import ai.openclaw.app.chat.SessionDiffLineKind
-import ai.openclaw.app.chat.SessionDiffScope
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.parseSessionDiffPatch
 import ai.openclaw.app.i18n.nativeString
@@ -161,7 +160,6 @@ internal fun SessionDiffSheet(
         viewModel.loadSessionDiff(
           sessionKey = opening.sessionKey,
           agentId = opening.composerOwner.agentId,
-          scope = SessionDiffScope.Uncommitted,
           expectedGatewayStableId = gateway,
         )
       val prepared = withContext(Dispatchers.Default) { prepareSessionDiffFiles(result) }
@@ -479,7 +477,6 @@ private fun SessionDiffFiles(
         when (snapshot.unavailableReason) {
           "not_git" -> nativeString("This conversation’s workspace is not a Git repository.")
           "unknown_session" -> nativeString("This conversation is no longer available. Reopen it and try again.")
-          "unknown_commit" -> nativeString("This commit is no longer available. Choose All changes or refresh.")
           "workspace_stopped" -> nativeString("The workspace is stopped. Showing its saved changes, if available.")
           null -> null
           else -> nativeString("Changes are unavailable for this workspace. Try refreshing.")

@@ -1,17 +1,14 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.chat.SessionDiffCommit
 import ai.openclaw.app.chat.SessionDiffFile
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.ClipboardManager
-import android.graphics.Bitmap
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -19,7 +16,6 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasScrollAction
@@ -29,7 +25,6 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
@@ -46,8 +41,6 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowToast
-import java.io.File
-import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "en-rUS-w360dp-h800dp-mdpi")
@@ -65,8 +58,6 @@ class SessionDiffContentTest {
         SessionDiffContent(snapshot, files, false, null, {}, {}, Modifier.fillMaxSize(), {})
       }
     }
-    val evidence = File("build/outputs/session-diff", UUID.randomUUID().toString())
-    check(evidence.mkdirs())
     for (isDark in listOf(false, true)) {
       composeRule.runOnIdle { dark.value = isDark }
       composeRule.onNodeWithText("Review changes").assertIsDisplayed()
@@ -75,11 +66,10 @@ class SessionDiffContentTest {
       composeRule.onNodeWithText("@@ -8,3 +8,3 @@", substring = true).assertIsDisplayed()
       composeRule.onNodeWithText("Binary file changed").assertIsDisplayed()
       composeRule.onNodeWithText("This file’s patch was truncated.").assertIsDisplayed()
-      val theme = if (isDark) "dark" else "light"
       val addedLine = composeRule.onNodeWithText("+ const retries = 3;", substring = true)
       addedLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
       composeRule.onNodeWithText("+ const retries = 3;").assertIsDisplayed()
-      capture(File(evidence, "review-$theme-hidden.png"))
+      composeRule.waitForIdle()
       addedLine.performTouchInput { click() }
       addedLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
       addedLine.performTouchInput { swipeRight() }
@@ -87,7 +77,7 @@ class SessionDiffContentTest {
       composeRule.onNodeWithText(" 8 + const retries = 3;").assertIsDisplayed()
       // A fresh rightward edge swipe reveals gutters throughout the viewer.
       composeRule.onNodeWithText(" 1 + export const ready = true;").assertIsDisplayed()
-      capture(File(evidence, "review-$theme-shown.png"))
+      composeRule.waitForIdle()
       addedLine.performTouchInput { click() }
       addedLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers shown"))
       addedLine.performTouchInput { swipeLeft() }
@@ -106,7 +96,7 @@ class SessionDiffContentTest {
   }
 
   @Test
-  fun wideUnicodeLineCanScrollToItsEndWithoutDependingOnAsciiCharacterWidth() {
+  fun wideUnicodeLineExposesOverflowAndKeepsGutterGesturesSeparate() {
     // Wide Unicode glyphs overflow even with the numeric gutters hidden.
     val text = "你好世界".repeat(10) + "🙂"
     val snapshot =
@@ -164,7 +154,7 @@ class SessionDiffContentTest {
     }
     composeRule.waitForIdle()
     val after = scroller.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange]
-    assertTrue("A horizontal gesture must reveal the rest of the Unicode line", after.value() > 0f)
+    assertTrue("A horizontal gesture must pan the Unicode line", after.value() > 0f)
     assertTrue(after.value() <= after.maxValue())
     codeLine.assertIsDisplayed()
     codeLine.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
@@ -285,7 +275,6 @@ class SessionDiffContentTest {
     }
     val clipboard = RuntimeEnvironment.getApplication().getSystemService(ClipboardManager::class.java)
     val previousClip = clipboard.primaryClip
-    val evidence = File("build/outputs/session-diff", UUID.randomUUID().toString()).apply { mkdirs() }
 
     fun assertHandles(
       active: String? = null,
@@ -302,7 +291,6 @@ class SessionDiffContentTest {
     try {
       for (isDark in listOf(false, true)) {
         composeRule.runOnIdle { dark.value = isDark }
-        val theme = if (isDark) "dark" else "light"
         // Disclosure replaces selection state; cancellation must target the new state.
         val header = composeRule.onNodeWithText("src/retry.ts")
         header.performClick()
@@ -316,7 +304,7 @@ class SessionDiffContentTest {
         composeRule.onNodeWithText("To chat").assertDoesNotExist()
         line.assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, true))
         assertHandles()
-        capture(File(evidence, "creating-$theme.png"))
+        composeRule.waitForIdle()
         line.performTouchInput { up() }
         assertHandles(finalized = true)
         composeRule.onNodeWithText("To chat").assertIsDisplayed()
@@ -342,7 +330,7 @@ class SessionDiffContentTest {
         }
         composeRule.onNodeWithText("To chat").assertDoesNotExist()
         assertHandles(active = "Selection end, $side")
-        capture(File(evidence, "refining-end-$theme.png"))
+        composeRule.waitForIdle()
         endHandle.performTouchInput { up() }
         assertHandles(finalized = true)
         composeRule.onNodeWithText("export { retries };", substring = true).assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, true))
@@ -352,19 +340,11 @@ class SessionDiffContentTest {
           moveTo(center + Offset(0f, 36f), delayMillis = 100)
         }
         assertHandles(active = "Selection start, $startSide")
-        capture(File(evidence, "refining-start-$theme.png"))
+        composeRule.waitForIdle()
         startHandle.performTouchInput { up() }
         assertHandles(finalized = true)
         line.assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
-        for ((name, matcher) in listOf("selection" to (isRoot() and hasAnyDescendant(hasText("Review changes"))), "actions" to SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "Selection actions"))) {
-          File(evidence, "$name-$theme.png").outputStream().use {
-            composeRule
-              .onNode(matcher)
-              .captureToImage()
-              .asAndroidBitmap()
-              .compress(Bitmap.CompressFormat.PNG, 100, it)
-          }
-        }
+        composeRule.waitForIdle()
         composeRule.onNodeWithText("Copy").performTouchInput { click() }
         composeRule.runOnIdle {
           assertEquals(
@@ -565,20 +545,10 @@ class SessionDiffContentTest {
     line.assertDoesNotExist()
     first.assertIsDisplayed()
     composeRule.onNodeWithText("To chat").assertIsDisplayed()
-    assertEquals(first.fetchSemanticsNode().positionInWindow.y - 8f - popupHeight, popupTop(), 1f)
-    val evidence = File("build/outputs/session-diff", UUID.randomUUID().toString()).apply { mkdirs() }
     for (isDark in listOf(false, true)) {
       composeRule.runOnIdle { dark.value = isDark }
-      val theme = if (isDark) "dark" else "light"
-      for ((name, matcher) in listOf("above" to (isRoot() and hasAnyDescendant(hasText("Review changes"))), "actions" to SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "Selection actions"))) {
-        File(evidence, "$name-$theme.png").outputStream().use {
-          composeRule
-            .onNode(matcher)
-            .captureToImage()
-            .asAndroidBitmap()
-            .compress(Bitmap.CompressFormat.PNG, 100, it)
-        }
-      }
+      composeRule.onNodeWithText("To chat").assertIsDisplayed()
+      assertEquals(first.fetchSemanticsNode().positionInWindow.y - 8f - popupHeight, popupTop(), 1f)
     }
     scroller.performScrollToIndex(15)
     val moveEndDown =
@@ -597,26 +567,12 @@ class SessionDiffContentTest {
     composeRule.onNodeWithText("To chat").assertDoesNotExist()
   }
 
-  private fun capture(file: File) {
-    file.outputStream().use { stream ->
-      assertTrue(
-        composeRule
-          .onRoot()
-          .captureToImage()
-          .asAndroidBitmap()
-          .compress(Bitmap.CompressFormat.PNG, 100, stream),
-      )
-    }
-  }
-
   private fun snapshot() =
     SessionDiffSnapshot(
       sessionKey = "synthetic-review",
       branch = "feature/retries",
-      baseRef = "main",
       additions = 2,
       deletions = 1,
-      commits = listOf(SessionDiffCommit("abc12345def67890", "Tune retry count")),
       files =
         listOf(
           SessionDiffFile(

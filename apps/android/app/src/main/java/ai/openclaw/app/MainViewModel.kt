@@ -20,7 +20,6 @@ import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionBranch
-import ai.openclaw.app.chat.SessionDiffScope
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
@@ -1706,10 +1705,8 @@ class MainViewModel private constructor(
   suspend fun loadSessionDiff(
     sessionKey: String,
     agentId: String?,
-    scope: SessionDiffScope,
-    commit: String? = null,
     expectedGatewayStableId: String,
-  ): SessionDiffSnapshot = ensureRuntime().loadSessionDiff(sessionKey, agentId, scope, commit, expectedGatewayStableId)
+  ): SessionDiffSnapshot = ensureRuntime().loadSessionDiff(sessionKey, agentId, expectedGatewayStableId)
 
   suspend fun listWorkspaceFiles(
     path: String?,

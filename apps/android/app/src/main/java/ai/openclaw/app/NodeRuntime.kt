@@ -34,7 +34,6 @@ import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SESSION_UNREAD_ACK_CAPABILITY
 import ai.openclaw.app.chat.SessionBranch
-import ai.openclaw.app.chat.SessionDiffScope
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
@@ -6925,18 +6924,13 @@ class NodeRuntime private constructor(
     return written
   }
 
-  /** Loads the same bounded checkout snapshot as the web Review panel. */
+  /** Loads the bounded uncommitted checkout snapshot for the native Review viewer. */
   suspend fun loadSessionDiff(
     sessionKey: String,
     agentId: String?,
-    scope: SessionDiffScope,
-    commit: String? = null,
     expectedGatewayStableId: String,
   ): SessionDiffSnapshot {
     require(sessionKey.isNotBlank()) { "Select a conversation to review its changes." }
-    require((scope == SessionDiffScope.Commit) == !commit.isNullOrBlank()) {
-      "Select a commit only when reviewing a single commit."
-    }
     val gatewayScope =
       captureGatewayDataScope()
         ?: throw IllegalStateException("Connect to the conversation's gateway to review changes.")
@@ -6947,8 +6941,7 @@ class NodeRuntime private constructor(
       buildJsonObject {
         put("sessionKey", JsonPrimitive(sessionKey))
         agentId?.takeIf { it.isNotBlank() }?.let { put("agentId", JsonPrimitive(it)) }
-        put("scope", JsonPrimitive(scope.wireValue))
-        if (scope == SessionDiffScope.Commit) put("commit", JsonPrimitive(commit))
+        put("scope", JsonPrimitive("uncommitted"))
       }
     val payload = requestGatewayData(gatewayScope, GatewayMethod.SessionsDiff.rawValue, params.toString(), timeoutMs = 30_000)
     val snapshot = withContext(Dispatchers.Default) { parseSessionDiff(json, payload) }
