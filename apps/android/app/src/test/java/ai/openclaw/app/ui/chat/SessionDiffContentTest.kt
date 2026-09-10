@@ -486,6 +486,12 @@ class SessionDiffContentTest {
 
     fun anchorGap(): Float {
       val selected = line.fetchSemanticsNode()
+      for (side in listOf("left", "right")) {
+        val start = composeRule.onNodeWithContentDescription("Selection start, $side").fetchSemanticsNode()
+        val end = composeRule.onNodeWithContentDescription("Selection end, $side").fetchSemanticsNode()
+        assertEquals("Start handle must follow the row while scrolling", selected.positionInWindow.y, start.positionInWindow.y + start.size.height, 1f)
+        assertEquals("End handle must follow the row while scrolling", selected.positionInWindow.y + selected.size.height, end.positionInWindow.y, 1f)
+      }
       return popupTop() - (selected.positionInWindow.y + selected.size.height)
     }
     composeRule
@@ -510,6 +516,24 @@ class SessionDiffContentTest {
     scroller.performScrollToIndex(16)
     assertTrue("Popup must follow the selection downward", popupTop() > scrolledUpTop)
     assertEquals(initialGap, anchorGap(), 1f)
+    // Refinement must start from the current row position, not its pre-scroll coordinates.
+    val rowHeight =
+      line
+        .fetchSemanticsNode()
+        .size.height
+        .toFloat()
+    composeRule.onNodeWithContentDescription("Selection end, right").performTouchInput {
+      down(center)
+      moveBy(Offset(0f, rowHeight), delayMillis = 100)
+      up()
+    }
+    composeRule.onNodeWithText("+ line 31").assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, true))
+    line.performTouchInput { click() }
+    line.performTouchInput {
+      down(center)
+      moveTo(center, delayMillis = 700)
+      up()
+    }
     scroller.performScrollToIndex(7)
     val selectedTop = line.fetchSemanticsNode().positionInWindow.y
     val popupHeight =

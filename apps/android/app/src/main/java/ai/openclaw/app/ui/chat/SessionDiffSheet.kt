@@ -39,7 +39,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -103,7 +102,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.text
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -565,21 +563,28 @@ private fun SessionDiffFiles(
     selection?.let { selected ->
       for (start in listOf(true, false)) {
         val index = if (start) selected.firstIndex else selected.lastIndex
-        val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == SessionDiffRowKey(selected.view.file.path, index) }
-        if (item != null) {
+        val rowKey = SessionDiffRowKey(selected.view.file.path, index)
+        val visible by remember(listState, rowKey) {
+          derivedStateOf { listState.layoutInfo.visibleItemsInfo.any { it.key == rowKey } }
+        }
+        if (visible) {
           for (left in listOf(true, false)) {
             // Keep the dragged handle's pointer node stable as its siblings disappear.
             key(start, left) {
               if (!selecting || activeHandle == (start to left)) {
-                val handlePosition = Offset(if (left) 24f * density.density else viewportWidth - 24f * density.density, (item.offset + if (start) 0 else item.size).toFloat())
+                val handlePosition = {
+                  listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == rowKey }?.let { item ->
+                    Offset(if (left) 24f * density.density else viewportWidth - 24f * density.density, (item.offset + if (start) 0 else item.size).toFloat())
+                  }
+                }
                 SessionDiffSelectionHandle(
                   start,
                   left,
                   handlePosition,
-                  onStart = {
+                  onStart = { position ->
                     activeHandle = start to left
                     selecting = true
-                    handleDragPosition = handlePosition
+                    handleDragPosition = position
                   },
                   onDrag = { delta ->
                     handleDragPosition += delta
@@ -632,8 +637,8 @@ private fun SessionDiffFiles(
 private fun SessionDiffSelectionHandle(
   start: Boolean,
   left: Boolean,
-  position: Offset,
-  onStart: () -> Unit,
+  position: () -> Offset?,
+  onStart: (Offset) -> Unit,
   onDrag: (Offset) -> Unit,
   onEnd: () -> Unit,
   onStep: (Int) -> Unit,
@@ -641,6 +646,7 @@ private fun SessionDiffSelectionHandle(
   val radius = with(LocalDensity.current) { 24.dp.toPx() }
   val appearance = remember { Animatable(0f) }
   LaunchedEffect(Unit) { appearance.animateTo(1f, tween(200)) }
+  val latestPosition by androidx.compose.runtime.rememberUpdatedState(position)
   val latestStart by androidx.compose.runtime.rememberUpdatedState(onStart)
   val latestDrag by androidx.compose.runtime.rememberUpdatedState(onDrag)
   val latestEnd by androidx.compose.runtime.rememberUpdatedState(onEnd)
@@ -656,8 +662,14 @@ private fun SessionDiffSelectionHandle(
     Modifier
       // Put touch targets outside the range so even one-line selections have
       // independent start/end handles on each side.
-      .offset { IntOffset((position.x - radius).toInt(), (position.y - if (start) 2 * radius else 0f).toInt()) }
-      .size(48.dp)
+      .layout { measurable, constraints ->
+        val handle = measurable.measure(constraints)
+        layout(handle.width, handle.height) {
+          position()?.let { anchor ->
+            handle.place((anchor.x - radius).toInt(), (anchor.y - if (start) 2 * radius else 0f).toInt())
+          }
+        }
+      }.size(48.dp)
       .semantics {
         contentDescription = label
         customActions =
@@ -673,7 +685,7 @@ private fun SessionDiffSelectionHandle(
           )
       }.pointerInput(start) {
         detectDragGestures(
-          onDragStart = { latestStart() },
+          onDragStart = { latestPosition()?.let { latestStart(it) } },
           onDrag = { change, delta ->
             change.consume()
             latestDrag(delta)
