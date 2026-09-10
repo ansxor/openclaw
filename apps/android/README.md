@@ -38,7 +38,7 @@ while visible line numbers stay fixed. Addition/deletion markers remain visible.
 Long-press a code line, then drag to select more lines. Release to choose **To
 chat** (append a `path:start-end` reference to your draft without sending it) or
 **Copy** (copy the selected text). A pulse marks the start of selection; a toast
-confirms either action. Drag either selection handle to refine the range before
+confirms either action. Drag any of the four selection handles to refine the range before
 choosing an action. Selection stays in one hunk and uses the starting line's
 side: **Before** for deleted lines, **After** otherwise. It skips the opposite
 side and never includes omitted context. Tap outside the actions to cancel.

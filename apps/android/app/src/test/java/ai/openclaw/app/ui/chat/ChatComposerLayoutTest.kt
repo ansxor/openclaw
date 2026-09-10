@@ -1762,7 +1762,17 @@ class ChatComposerLayoutTest {
     val endpointField = NodeRuntime::class.java.getDeclaredField("connectedEndpoint").apply { isAccessible = true }
     val previousEndpoint = endpointField.get(runtime)
     val previousRequest = runtime.gatewayDataRequestOverrideForTests
+    val chatRequestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val previousChatRequest = chatRequestField.get(controller) as suspend (String, String, String?) -> String
+    val chatMethods = ConcurrentLinkedQueue<String>()
+    val observeChatRequest: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      chatMethods.add(method)
+      previousChatRequest(gatewayId, method, params)
+    }
     try {
+      chatRequestField.set(controller, observeChatRequest)
       endpointField.set(
         runtime,
         ai.openclaw.app.gateway.GatewayEndpoint(
@@ -1833,7 +1843,7 @@ class ChatComposerLayoutTest {
           org.robolectric.shadows.ShadowToast
             .getTextOfLatestToast(),
         )
-        assertEquals("Referencing code must not send a message", 1, calls.size)
+        assertFalse("Referencing code must not send the draft", "chat.send" in chatMethods)
       }
 
       fun reopenReview() {
@@ -1858,6 +1868,7 @@ class ChatComposerLayoutTest {
       composeRule.onNodeWithText("Snapshot from the conversation workspace", substring = true).assertDoesNotExist()
       assertEquals("Retiring review must not reload it for the next conversation", 3, calls.size)
     } finally {
+      chatRequestField.set(controller, previousChatRequest)
       runtime.gatewayDataRequestOverrideForTests = previousRequest
       endpointField.set(runtime, previousEndpoint)
     }
