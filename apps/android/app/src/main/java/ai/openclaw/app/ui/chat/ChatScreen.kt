@@ -83,6 +83,7 @@ import ai.openclaw.app.ui.rememberWindowDisplayFeatureState
 import ai.openclaw.app.ui.sessionPresentationTitle
 import ai.openclaw.app.ui.sidebarCatalogHosts
 import android.os.SystemClock
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -1327,6 +1328,15 @@ internal fun ChatScreen(
         opening = opening,
         admit = { reviewDiff.admit(opening) },
         onDismiss = { if (reviewDiff.admit(opening)) reviewDiff.retire(opening) },
+        onReference = { reference ->
+          if (reviewDiff.admit(opening) && viewModel.isCurrentChatComposerOwner(opening.composerOwner)) {
+            val owner = opening.composerOwner
+            val draft = inputDrafts[owner]
+            inputDrafts[owner] = draft + (if (draft.isEmpty() || draft.endsWith("\n")) "" else "\n") + reference
+            reviewDiff.retire(opening)
+            Toast.makeText(context, nativeString("Reference added to chat"), Toast.LENGTH_SHORT).show()
+          }
+        },
       )
     }
   }

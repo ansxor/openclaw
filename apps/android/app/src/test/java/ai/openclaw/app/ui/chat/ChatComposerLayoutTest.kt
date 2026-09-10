@@ -1817,9 +1817,24 @@ class ChatComposerLayoutTest {
           capture.asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)
         }
       }
-      composeRule.onNodeWithContentDescription(nativeString("Close review")).performClick()
+      composeRule.runOnIdle { model.chatComposerState.textDrafts[owner] = "Keep my draft" }
+      composeRule.onNodeWithText("Snapshot from the conversation workspace", substring = true).performTouchInput {
+        down(center)
+        moveTo(center, delayMillis = 700)
+        up()
+      }
+      composeRule.onNodeWithText(nativeString("To chat")).performClick()
       composeRule.waitForIdle()
       composeRule.onNode(isDialog()).assertDoesNotExist()
+      composeRule.runOnIdle {
+        assertEquals("Keep my draft\nreview-fixture.txt:1-1", model.chatComposerState.textDrafts[owner])
+        assertEquals(
+          "Reference added to chat",
+          org.robolectric.shadows.ShadowToast
+            .getTextOfLatestToast(),
+        )
+        assertEquals("Referencing code must not send a message", 1, calls.size)
+      }
 
       fun reopenReview() {
         composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()

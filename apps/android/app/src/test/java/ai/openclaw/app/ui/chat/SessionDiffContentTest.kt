@@ -7,10 +7,14 @@ import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.ClipboardManager
 import android.graphics.Bitmap
+import android.view.WindowManager
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
@@ -18,14 +22,21 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isPopup
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -35,6 +46,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowToast
+import org.robolectric.shadows.ShadowWindowManagerImpl
 import java.io.File
 import java.util.UUID
 
@@ -51,7 +65,7 @@ class SessionDiffContentTest {
     val files = prepareSessionDiffFiles(snapshot)
     composeRule.setContent {
       ClawDesignTheme(dark = dark.value) {
-        SessionDiffContent(snapshot, files, false, null, SessionDiffScope.All, null, { _, _ -> }, {}, {}, Modifier.fillMaxSize())
+        SessionDiffContent(snapshot, files, false, null, SessionDiffScope.All, null, { _, _ -> }, {}, {}, Modifier.fillMaxSize(), {})
       }
     }
     val evidence = File("build/outputs/session-diff", UUID.randomUUID().toString())
@@ -105,7 +119,7 @@ class SessionDiffContentTest {
     val files = prepareSessionDiffFiles(snapshot)
     composeRule.setContent {
       ClawDesignTheme {
-        SessionDiffContent(snapshot, files, false, null, SessionDiffScope.All, null, { _, _ -> }, {}, {}, Modifier.fillMaxSize())
+        SessionDiffContent(snapshot, files, false, null, SessionDiffScope.All, null, { _, _ -> }, {}, {}, Modifier.fillMaxSize(), {})
       }
     }
     val codeLine = composeRule.onNodeWithText(text, substring = true)
@@ -156,6 +170,7 @@ class SessionDiffContentTest {
           { refreshes++ },
           { closes++ },
           Modifier.fillMaxSize(),
+          onReference = {},
         )
       }
     }
@@ -204,6 +219,7 @@ class SessionDiffContentTest {
           { retries++ },
           {},
           Modifier.fillMaxSize(),
+          onReference = {},
         )
       }
     }
@@ -217,6 +233,273 @@ class SessionDiffContentTest {
     composeRule.onNodeWithText("No changes in this snapshot.").assertDoesNotExist()
     composeRule.onNodeWithText("Try again").performClick()
     composeRule.runOnIdle { assertEquals(1, retries) }
+  }
+
+  @Test
+  fun longPressDragSelectsCodeAndOffersCopyOrReferenceAfterRelease() {
+    val dark = mutableStateOf(false)
+    val snapshot = snapshot()
+    val files = prepareSessionDiffFiles(snapshot)
+    val references = mutableListOf<String>()
+    composeRule.setContent {
+      ClawDesignTheme(dark = dark.value) {
+        SessionDiffContent(
+          snapshot,
+          files,
+          false,
+          null,
+          SessionDiffScope.All,
+          null,
+          { _, _ -> },
+          {},
+          {},
+          Modifier.fillMaxSize(),
+          onReference = { references += it },
+        )
+      }
+    }
+    val clipboard = RuntimeEnvironment.getApplication().getSystemService(ClipboardManager::class.java)
+    val previousClip = clipboard.primaryClip
+    val evidence = File("build/outputs/session-diff", UUID.randomUUID().toString()).apply { mkdirs() }
+
+    fun assertHandles(
+      active: String? = null,
+      finalized: Boolean = false,
+    ) {
+      for (edge in listOf("start", "end")) {
+        for (side in listOf("left", "right")) {
+          val label = "Selection $edge, $side"
+          val handle = composeRule.onNodeWithContentDescription(label)
+          if (finalized || label == active) handle.assertIsDisplayed() else handle.assertDoesNotExist()
+        }
+      }
+    }
+    try {
+      for (isDark in listOf(false, true)) {
+        composeRule.runOnIdle { dark.value = isDark }
+        val theme = if (isDark) "dark" else "light"
+        val line = composeRule.onNodeWithText("+ const retries = 3;", substring = true)
+        line.performTouchInput {
+          down(center)
+          moveTo(center, delayMillis = 700)
+          moveTo(center + Offset(0f, height.toFloat()), delayMillis = 100)
+        }
+        composeRule.onNodeWithText("To chat").assertDoesNotExist()
+        line.assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, true))
+        assertHandles()
+        capture(File(evidence, "creating-$theme.png"))
+        line.performTouchInput { up() }
+        assertHandles(finalized = true)
+        composeRule.onNodeWithText("To chat").assertIsDisplayed()
+        composeRule.onNodeWithText("After · src/retry.ts:8-9").assertDoesNotExist()
+        // Dismissing a selection must not also reveal hidden line numbers.
+        val otherLine = composeRule.onNodeWithText("− const retries = 1;")
+        otherLine.performTouchInput { click() }
+        composeRule.onNodeWithText("To chat").assertDoesNotExist()
+        line.assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+        line.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
+        line.performTouchInput {
+          down(center)
+          moveTo(center, delayMillis = 700)
+          moveTo(center + Offset(0f, height.toFloat()), delayMillis = 100)
+          up()
+        }
+        val side = if (isDark) "left" else "right"
+        val startSide = if (isDark) "right" else "left"
+        val endHandle = composeRule.onNodeWithContentDescription("Selection end, $side")
+        endHandle.performTouchInput {
+          down(center)
+          moveTo(center + Offset(0f, 18f), delayMillis = 100)
+        }
+        composeRule.onNodeWithText("To chat").assertDoesNotExist()
+        assertHandles(active = "Selection end, $side")
+        capture(File(evidence, "refining-end-$theme.png"))
+        endHandle.performTouchInput { up() }
+        assertHandles(finalized = true)
+        composeRule.onNodeWithText("export { retries };", substring = true).assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, true))
+        val startHandle = composeRule.onNodeWithContentDescription("Selection start, $startSide")
+        startHandle.performTouchInput {
+          down(center)
+          moveTo(center + Offset(0f, 36f), delayMillis = 100)
+        }
+        assertHandles(active = "Selection start, $startSide")
+        capture(File(evidence, "refining-start-$theme.png"))
+        startHandle.performTouchInput { up() }
+        assertHandles(finalized = true)
+        line.assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+        for ((name, matcher) in listOf("selection" to (isRoot() and hasAnyDescendant(hasText("Review changes"))), "actions" to isPopup())) {
+          File(evidence, "$name-$theme.png").outputStream().use {
+            composeRule
+              .onNode(matcher)
+              .captureToImage()
+              .asAndroidBitmap()
+              .compress(Bitmap.CompressFormat.PNG, 100, it)
+          }
+        }
+        composeRule.onNodeWithText("Copy").performClick()
+        composeRule.runOnIdle {
+          assertEquals(
+            "export { retries };\n// 你好世界 · ready 🙂",
+            clipboard.primaryClip
+              ?.getItemAt(0)
+              ?.text
+              ?.toString(),
+          )
+          assertEquals("Text copied", ShadowToast.getTextOfLatestToast())
+        }
+        composeRule.onNodeWithText("Copy").assertDoesNotExist()
+        line.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Line numbers hidden"))
+        // Cancellation must leave neither a selection nor its actions behind.
+        line.performTouchInput {
+          down(center)
+          moveTo(center, delayMillis = 700)
+          cancel()
+        }
+        line.assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+        composeRule.onNodeWithText("To chat").assertDoesNotExist()
+        line.performTouchInput {
+          down(center)
+          moveTo(center, delayMillis = 700)
+          up()
+        }
+        // Single-line selections keep all four full touch targets disjoint.
+        for (edgeSide in listOf("left", "right")) {
+          val startBounds = composeRule.onNodeWithContentDescription("Selection start, $edgeSide").fetchSemanticsNode().boundsInRoot
+          val endBounds = composeRule.onNodeWithContentDescription("Selection end, $edgeSide").fetchSemanticsNode().boundsInRoot
+          assertTrue(startBounds.height >= 48f && endBounds.height >= 48f)
+          assertTrue(startBounds.bottom <= endBounds.top)
+        }
+        composeRule.onNodeWithContentDescription("Selection end, right").performTouchInput {
+          down(center)
+          moveTo(center + Offset(0f, 18f), delayMillis = 100)
+          up()
+        }
+        composeRule.onNodeWithText("To chat").performClick()
+      }
+      composeRule.runOnIdle { assertEquals(listOf("src/retry.ts:8-9", "src/retry.ts:8-9"), references) }
+    } finally {
+      if (previousClip == null) clipboard.clearPrimaryClip() else clipboard.setPrimaryClip(previousClip)
+    }
+  }
+
+  @Test
+  fun selectionActionsFollowSelectedEndWhenScrollingBothWays() {
+    val snapshot =
+      snapshot().copy(
+        files =
+          listOf(
+            SessionDiffFile(
+              "src/scroll.ts",
+              "added",
+              100,
+              0,
+              patch = "@@ -0,0 +1,100 @@\n" + (1..100).joinToString("\n") { "+line $it" },
+            ),
+          ),
+      )
+    val files = prepareSessionDiffFiles(snapshot)
+    val dark = mutableStateOf(false)
+    composeRule.setContent {
+      ClawDesignTheme(dark = dark.value) {
+        SessionDiffContent(snapshot, files, false, null, SessionDiffScope.All, null, { _, _ -> }, {}, {}, Modifier.fillMaxSize().padding(bottom = 200.dp), {})
+      }
+    }
+    val scroller = composeRule.onNode(hasScrollAction())
+    scroller.performScrollToIndex(15)
+    val line = composeRule.onNodeWithText("+ line 30")
+    line.performTouchInput {
+      down(center)
+      moveTo(center, delayMillis = 700)
+      up()
+    }
+    composeRule.onNodeWithText("After · src/scroll.ts:30-30").assertDoesNotExist()
+
+    fun popupTop(): Float {
+      composeRule.waitForIdle()
+      val manager = RuntimeEnvironment.getApplication().getSystemService(WindowManager::class.java)
+      val windows = Shadow.extract<ShadowWindowManagerImpl>(manager).views
+      return windows
+        .map { it.layoutParams as WindowManager.LayoutParams }
+        .single { it.type == WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL }
+        .y
+        .toFloat()
+    }
+
+    fun anchorGap(): Float {
+      val selected = line.fetchSemanticsNode()
+      return popupTop() - (selected.positionInWindow.y + selected.size.height)
+    }
+    val initialTop = popupTop()
+    val initialGap = anchorGap()
+    assertEquals(8f, initialGap, 1f)
+    scroller.performScrollToIndex(18)
+    val scrolledUpTop = popupTop()
+    assertTrue("Popup must follow the selection upward", scrolledUpTop < initialTop)
+    assertEquals(initialGap, anchorGap(), 1f)
+    scroller.performScrollToIndex(16)
+    assertTrue("Popup must follow the selection downward", popupTop() > scrolledUpTop)
+    assertEquals(initialGap, anchorGap(), 1f)
+    scroller.performScrollToIndex(7)
+    val selectedTop = line.fetchSemanticsNode().positionInWindow.y
+    val popupHeight =
+      composeRule
+        .onNode(isPopup())
+        .fetchSemanticsNode()
+        .size.height
+    assertEquals("Bottom overflow must place actions above selection", selectedTop - 8f - popupHeight, popupTop(), 1f)
+    val viewport = scroller.fetchSemanticsNode()
+    assertTrue(popupTop() + popupHeight <= viewport.positionInWindow.y + viewport.size.height)
+    scroller.performScrollToIndex(70)
+    composeRule.onNodeWithText("To chat").assertDoesNotExist()
+    scroller.performScrollToIndex(15)
+    composeRule.onNodeWithText("To chat").assertIsDisplayed()
+    assertEquals(initialGap, anchorGap(), 1f)
+
+    // The selected end can be outside the lazy viewport, not just too low
+    // to fit the popup. Keep actions above the remaining visible selection.
+    line.performTouchInput { click() }
+    val first = composeRule.onNodeWithText("+ line 20")
+    val dragDistance = line.fetchSemanticsNode().positionInRoot.y - first.fetchSemanticsNode().positionInRoot.y
+    first.performTouchInput {
+      down(center)
+      moveTo(center, delayMillis = 700)
+      moveBy(Offset(0f, dragDistance))
+      up()
+    }
+    scroller.performScrollToIndex(0)
+    line.assertDoesNotExist()
+    first.assertIsDisplayed()
+    composeRule.onNodeWithText("To chat").assertIsDisplayed()
+    assertEquals(first.fetchSemanticsNode().positionInWindow.y - 8f - popupHeight, popupTop(), 1f)
+    val evidence = File("build/outputs/session-diff", UUID.randomUUID().toString()).apply { mkdirs() }
+    for (isDark in listOf(false, true)) {
+      composeRule.runOnIdle { dark.value = isDark }
+      val theme = if (isDark) "dark" else "light"
+      for ((name, matcher) in listOf("above" to (isRoot() and hasAnyDescendant(hasText("Review changes"))), "actions" to isPopup())) {
+        File(evidence, "$name-$theme.png").outputStream().use {
+          composeRule
+            .onNode(matcher)
+            .captureToImage()
+            .asAndroidBitmap()
+            .compress(Bitmap.CompressFormat.PNG, 100, it)
+        }
+      }
+    }
+    scroller.performScrollToIndex(15)
+    val moveEndDown =
+      composeRule
+        .onNodeWithContentDescription("Selection end, right")
+        .fetchSemanticsNode()
+        .config[SemanticsActions.CustomActions]
+        .single { it.label == "Move down" }
+    composeRule.runOnIdle { repeat(40) { moveEndDown.action() } }
+    scroller.performScrollToIndex(30)
+    first.assertDoesNotExist()
+    composeRule.onNodeWithText("+ line 70").assertDoesNotExist()
+    composeRule.onNodeWithText("To chat").assertIsDisplayed()
+    assertEquals("A selection spanning both viewport edges keeps its actions visible", scroller.fetchSemanticsNode().positionInWindow.y, popupTop(), 1f)
+    scroller.performScrollToIndex(90)
+    composeRule.onNodeWithText("To chat").assertDoesNotExist()
   }
 
   private fun capture(file: File) {

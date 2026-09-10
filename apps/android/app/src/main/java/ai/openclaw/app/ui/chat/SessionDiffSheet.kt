@@ -15,14 +15,21 @@ import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.foldAwareSheet
 import android.graphics.Paint
 import android.graphics.Typeface
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.rememberScrollableState
 import androidx.compose.foundation.gestures.scrollable
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,14 +39,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -48,11 +58,13 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -61,29 +73,54 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.ScrollAxisRange
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.horizontalScrollAxisRange
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.text
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+
+private data class SessionDiffRowKey(
+  val path: String,
+  val index: Int,
+) : java.io.Serializable
 
 internal data class SessionDiffFileView(
   val file: SessionDiffFile,
@@ -96,8 +133,7 @@ internal fun prepareSessionDiffFiles(snapshot: SessionDiffSnapshot): List<Sessio
       file,
       file.patch
         ?.let(::parseSessionDiffPatch)
-        .orEmpty()
-        .map { it.copy(text = it.text.replace("\t", "    ")) },
+        .orEmpty(),
     )
   }
 
@@ -107,6 +143,7 @@ internal fun SessionDiffSheet(
   opening: ChatModelPickerSession,
   admit: () -> Boolean,
   onDismiss: () -> Unit,
+  onReference: (String) -> Unit,
 ) {
   var selectedScope by remember { mutableStateOf(SessionDiffScope.All) }
   var selectedCommit by remember { mutableStateOf<String?>(null) }
@@ -181,6 +218,7 @@ internal fun SessionDiffSheet(
       },
       onRefresh = { if (admit()) refresh++ },
       onClose = onDismiss,
+      onReference = { reference -> if (isCurrent() && admit()) onReference(reference) },
       modifier =
         Modifier
           .fillMaxSize()
@@ -204,6 +242,7 @@ internal fun SessionDiffContent(
   onRefresh: () -> Unit,
   onClose: () -> Unit,
   modifier: Modifier = Modifier,
+  onReference: (String) -> Unit,
 ) {
   var scopeMenu by remember { mutableStateOf(false) }
   var collapsed by remember { mutableStateOf(emptySet<String>()) }
@@ -283,6 +322,7 @@ internal fun SessionDiffContent(
           showLineNumbers,
           { showLineNumbers = !showLineNumbers },
           Modifier.weight(1f),
+          onReference,
         )
       }
     }
@@ -298,6 +338,7 @@ private fun SessionDiffFiles(
   showLineNumbers: Boolean,
   toggleLineNumbers: () -> Unit,
   modifier: Modifier,
+  onReference: (String) -> Unit,
 ) {
   val context = LocalContext.current
   val density = LocalDensity.current
@@ -339,7 +380,7 @@ private fun SessionDiffFiles(
     value =
       withContext(Dispatchers.Default) {
         val paint = Paint(codePaint)
-        files.maxOfOrNull { file -> file.lines.maxOfOrNull { paint.measureText(it.text) } ?: 0f } ?: 0f
+        files.maxOfOrNull { file -> file.lines.maxOfOrNull { paint.measureText(it.text.replace("\t", "    ")) } ?: 0f } ?: 0f
       }
   }
   var viewportWidth by remember { mutableIntStateOf(0) }
@@ -352,89 +393,369 @@ private fun SessionDiffFiles(
       previous - horizontalOffset
     }
   LaunchedEffect(maxOffset) { horizontalOffset = horizontalOffset.coerceAtMost(maxOffset) }
-  LazyColumn(
-    modifier
-      .fillMaxWidth()
-      .onSizeChanged { viewportWidth = it.width }
-      .scrollable(horizontalScroll, Orientation.Horizontal)
-      .semantics { horizontalScrollAxisRange = ScrollAxisRange({ horizontalOffset }, { maxOffset }) },
+  val listState = rememberLazyListState()
+  var selection by remember(files, collapsed) { mutableStateOf<SessionDiffSelection?>(null) }
+  var selecting by remember(files, collapsed) { mutableStateOf(false) }
+  var activeHandle by remember(files, collapsed) { mutableStateOf<Pair<Boolean, Boolean>?>(null) }
+  var handleDragPosition by remember { mutableStateOf(Offset.Zero) }
+  val haptic = LocalHapticFeedback.current
+  val pulse = remember { Animatable(0.16f) }
+  var selectionPulse by remember { mutableIntStateOf(0) }
+  LaunchedEffect(selectionPulse) {
+    if (selectionPulse > 0) {
+      pulse.snapTo(0.38f)
+      pulse.animateTo(0.16f, tween(350))
+    }
+  }
+
+  fun lineAt(position: Offset): Pair<SessionDiffFileView, Int>? {
+    val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { position.y >= it.offset && position.y < it.offset + it.size }
+    val key = item?.key as? SessionDiffRowKey ?: return null
+    return files.firstOrNull { it.file.path == key.path }?.let { it to key.index }
+  }
+
+  fun beginSelection(
+    view: SessionDiffFileView,
+    index: Int,
+    dragging: Boolean,
   ) {
-    val unavailable =
-      when (snapshot.unavailableReason) {
-        "not_git" -> nativeString("This conversation’s workspace is not a Git repository.")
-        "unknown_session" -> nativeString("This conversation is no longer available. Reopen it and try again.")
-        "unknown_commit" -> nativeString("This commit is no longer available. Choose All changes or refresh.")
-        "workspace_stopped" -> nativeString("The workspace is stopped. Showing its saved changes, if available.")
-        null -> null
-        else -> nativeString("Changes are unavailable for this workspace. Try refreshing.")
+    val started = SessionDiffSelection.start(view, index) ?: return
+    selection = started
+    selecting = dragging
+    activeHandle = null
+    selectionPulse++
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+  }
+  Box(
+    modifier.pointerInput(files) {
+      awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
+        if (waitForUpOrCancellation(PointerEventPass.Final) != null) selection = null
       }
-    if (unavailable != null) item { DiffNotice(unavailable) }
-    if (snapshot.truncated) item { DiffNotice(nativeString("Large diff: some files or patches were omitted from this snapshot.")) }
-    if (files.isEmpty() && unavailable == null) item { DiffNotice(nativeString("No changes in this snapshot.")) }
-    files.forEach { view ->
-      val file = view.file
-      item(key = "header:${file.path}", contentType = "file") {
-        Row(Modifier.fillMaxWidth().background(ClawTheme.colors.surfaceRaised), verticalAlignment = Alignment.CenterVertically) {
-          val expandedLabel = if (file.path in collapsed) nativeString("Collapsed") else nativeString("Expanded")
-          Row(
-            Modifier
-              .weight(1f)
-              .heightIn(min = ClawTheme.spacing.touchTarget)
-              .clickable(role = Role.Button) { toggle(file.path) }
-              .semantics { stateDescription = expandedLabel }
-              .padding(ClawTheme.spacing.xxs),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
-          ) {
-            Icon(
-              if (file.path in collapsed) Icons.Default.ChevronRight else Icons.Default.ExpandMore,
-              contentDescription = null,
-              modifier = Modifier.size(ClawTheme.spacing.icon),
-              tint = ClawTheme.colors.textMuted,
+    },
+  ) {
+    LazyColumn(
+      Modifier
+        .fillMaxSize()
+        .pointerInput(files, collapsed) {
+          awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val (view, index) = lineAt(down.position) ?: return@awaitEachGesture
+            awaitLongPressOrCancellation(down.id) ?: return@awaitEachGesture
+            beginSelection(view, index, true)
+            if (!selecting) return@awaitEachGesture
+            try {
+              while (true) {
+                // Selection owns the pointer before child tap and scroll handlers.
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (change.isConsumed) break
+                change.consume()
+                lineAt(change.position)?.let { (targetView, targetIndex) ->
+                  selection?.takeIf { it.view === targetView }?.let { selection = it.extend(targetIndex) }
+                }
+                if (!change.pressed) {
+                  selecting = false
+                  break
+                }
+              }
+            } finally {
+              if (selecting) {
+                selecting = false
+                selection = null
+              }
+            }
+          }
+        }.fillMaxWidth()
+        .onSizeChanged { viewportWidth = it.width }
+        .scrollable(horizontalScroll, Orientation.Horizontal, enabled = !selecting)
+        .semantics { horizontalScrollAxisRange = ScrollAxisRange({ horizontalOffset }, { maxOffset }) },
+      state = listState,
+      userScrollEnabled = !selecting,
+    ) {
+      val unavailable =
+        when (snapshot.unavailableReason) {
+          "not_git" -> nativeString("This conversation’s workspace is not a Git repository.")
+          "unknown_session" -> nativeString("This conversation is no longer available. Reopen it and try again.")
+          "unknown_commit" -> nativeString("This commit is no longer available. Choose All changes or refresh.")
+          "workspace_stopped" -> nativeString("The workspace is stopped. Showing its saved changes, if available.")
+          null -> null
+          else -> nativeString("Changes are unavailable for this workspace. Try refreshing.")
+        }
+      if (unavailable != null) item { DiffNotice(unavailable) }
+      if (snapshot.truncated) item { DiffNotice(nativeString("Large diff: some files or patches were omitted from this snapshot.")) }
+      if (files.isEmpty() && unavailable == null) item { DiffNotice(nativeString("No changes in this snapshot.")) }
+      files.forEach { view ->
+        val file = view.file
+        item(key = "header:${file.path}", contentType = "file") {
+          Row(Modifier.fillMaxWidth().background(ClawTheme.colors.surfaceRaised), verticalAlignment = Alignment.CenterVertically) {
+            val expandedLabel = if (file.path in collapsed) nativeString("Collapsed") else nativeString("Expanded")
+            Row(
+              Modifier
+                .weight(1f)
+                .heightIn(min = ClawTheme.spacing.touchTarget)
+                .clickable(role = Role.Button) { toggle(file.path) }
+                .semantics { stateDescription = expandedLabel }
+                .padding(ClawTheme.spacing.xxs),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+            ) {
+              Icon(
+                if (file.path in collapsed) Icons.Default.ChevronRight else Icons.Default.ExpandMore,
+                contentDescription = null,
+                modifier = Modifier.size(ClawTheme.spacing.icon),
+                tint = ClawTheme.colors.textMuted,
+              )
+              Column(Modifier.weight(1f)) {
+                Text(file.path, style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (file.oldPath != null) {
+                  Text(
+                    file.oldPath,
+                    style = ClawTheme.type.caption,
+                    color = ClawTheme.colors.textMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+              }
+              Text("+${file.additions}", style = ClawTheme.type.caption, color = ClawTheme.colors.success)
+              Text("−${file.deletions}", style = ClawTheme.type.caption, color = ClawTheme.colors.danger)
+            }
+            ClawPlainIconButton(
+              Icons.Default.ContentCopy,
+              nativeString("Copy patch"),
+              { file.patch?.let { patch -> copyChatText(context, patch) } },
+              enabled = file.patch != null,
             )
-            Column(Modifier.weight(1f)) {
-              Text(file.path, style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
-              if (file.oldPath != null) {
-                Text(
-                  file.oldPath,
-                  style = ClawTheme.type.caption,
-                  color = ClawTheme.colors.textMuted,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
+          }
+        }
+        if (file.path !in collapsed) {
+          if (file.binary || view.lines.isEmpty()) {
+            item(key = "notice:${file.path}") {
+              DiffNotice(if (file.binary) nativeString("Binary file changed") else nativeString("No text patch available"))
+            }
+          }
+          itemsIndexed(view.lines, key = { index, _ -> SessionDiffRowKey(file.path, index) }, contentType = { _, _ -> "line" }) { index, line ->
+            SessionDiffCodeRow(
+              line,
+              horizontalOffset,
+              codePaint,
+              gutterDigits,
+              numberWidth,
+              revealedNumberWidth,
+              gutterWidth,
+              showLineNumbers,
+              {
+                if (selection != null) selection = null else toggleLineNumbers()
+              },
+              selection?.let { it.view === view && it.contains(index) } == true,
+              pulse.value,
+              {
+                beginSelection(view, index, false)
+              },
+            )
+          }
+          if (file.truncated) item(key = "truncated:${file.path}") { DiffNotice(nativeString("This file’s patch was truncated.")) }
+        }
+      }
+    }
+    BackHandler(enabled = selection != null) { selection = null }
+    selection?.let { selected ->
+      for (start in listOf(true, false)) {
+        val index = if (start) selected.firstIndex else selected.lastIndex
+        val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == SessionDiffRowKey(selected.view.file.path, index) }
+        if (item != null) {
+          for (left in listOf(true, false)) {
+            // Keep the dragged handle's pointer node stable as its siblings disappear.
+            key(start, left) {
+              if (!selecting || activeHandle == (start to left)) {
+                val handlePosition = Offset(if (left) 24f * density.density else viewportWidth - 24f * density.density, (item.offset + if (start) 0 else item.size).toFloat())
+                SessionDiffSelectionHandle(
+                  start,
+                  left,
+                  handlePosition,
+                  onStart = {
+                    activeHandle = start to left
+                    selecting = true
+                    handleDragPosition = handlePosition
+                  },
+                  onDrag = { delta ->
+                    handleDragPosition += delta
+                    lineAt(handleDragPosition)?.let { (view, index) ->
+                      selection?.takeIf { it.view === view }?.let { selection = it.moveEdge(index, start) }
+                    }
+                  },
+                  onEnd = {
+                    selecting = false
+                    activeHandle = null
+                  },
+                  onStep = { delta -> selection = selection?.stepEdge(start, delta) },
                 )
               }
             }
-            Text("+${file.additions}", style = ClawTheme.type.caption, color = ClawTheme.colors.success)
-            Text("−${file.deletions}", style = ClawTheme.type.caption, color = ClawTheme.colors.danger)
           }
-          ClawPlainIconButton(
-            Icons.Default.ContentCopy,
-            nativeString("Copy patch"),
-            { file.patch?.let { patch -> copyChatText(context, patch) } },
-            enabled = file.patch != null,
-          )
         }
       }
-      if (file.path !in collapsed) {
-        if (file.binary || view.lines.isEmpty()) {
-          item(key = "notice:${file.path}") {
-            DiffNotice(if (file.binary) nativeString("Binary file changed") else nativeString("No text patch available"))
-          }
+    }
+    selection?.takeIf { !selecting }?.let { selected ->
+      val layout = listState.layoutInfo
+      val intersectsViewport =
+        layout.visibleItemsInfo.any { item ->
+          val key = item.key as? SessionDiffRowKey
+          key?.path == selected.view.file.path && selected.contains(key.index) &&
+            item.offset < layout.viewportEndOffset && item.offset + item.size > layout.viewportStartOffset
         }
-        itemsIndexed(view.lines, key = { index, _ -> "line:${file.path}:$index" }, contentType = { _, _ -> "line" }) { _, line ->
-          SessionDiffCodeRow(
-            line,
-            horizontalOffset,
-            codePaint,
-            gutterDigits,
-            numberWidth,
-            revealedNumberWidth,
-            gutterWidth,
-            showLineNumbers,
-            toggleLineNumbers,
+      // Lazy layout can omit either endpoint while the selection still crosses
+      // the viewport. An absent end is below it, so placement must flip above.
+      if (intersectsViewport) {
+        val lastRow = layout.visibleItemsInfo.firstOrNull { it.key == SessionDiffRowKey(selected.view.file.path, selected.lastIndex) }
+        val bottom = lastRow?.let { it.offset + it.size } ?: layout.viewportEndOffset
+        SessionDiffSelectionMenu(
+          Offset(viewportWidth / 2f, bottom.toFloat()),
+          selectionTop =
+            layout.visibleItemsInfo.firstOrNull { it.key == SessionDiffRowKey(selected.view.file.path, selected.firstIndex) }?.offset
+              ?: layout.viewportStartOffset,
+          viewportTop = layout.viewportStartOffset,
+          viewportBottom = layout.viewportEndOffset,
+          onDismiss = { selection = null },
+          onReference = {
+            selection = null
+            onReference(selected.reference)
+          },
+          onCopy = {
+            copyChatText(context, selected.text)
+            selection = null
+          },
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun SessionDiffSelectionHandle(
+  start: Boolean,
+  left: Boolean,
+  position: Offset,
+  onStart: () -> Unit,
+  onDrag: (Offset) -> Unit,
+  onEnd: () -> Unit,
+  onStep: (Int) -> Unit,
+) {
+  val radius = with(LocalDensity.current) { 24.dp.toPx() }
+  val appearance = remember { Animatable(0f) }
+  LaunchedEffect(Unit) { appearance.animateTo(1f, tween(200)) }
+  val latestStart by androidx.compose.runtime.rememberUpdatedState(onStart)
+  val latestDrag by androidx.compose.runtime.rememberUpdatedState(onDrag)
+  val latestEnd by androidx.compose.runtime.rememberUpdatedState(onEnd)
+  val color = ClawTheme.colors.accent
+  val label =
+    when {
+      start && left -> nativeString("Selection start, left")
+      start -> nativeString("Selection start, right")
+      left -> nativeString("Selection end, left")
+      else -> nativeString("Selection end, right")
+    }
+  Canvas(
+    Modifier
+      // Put touch targets outside the range so even one-line selections have
+      // independent start/end handles on each side.
+      .offset { IntOffset((position.x - radius).toInt(), (position.y - if (start) 2 * radius else 0f).toInt()) }
+      .size(48.dp)
+      .semantics {
+        contentDescription = label
+        customActions =
+          listOf(
+            CustomAccessibilityAction(nativeString("Move up")) {
+              onStep(-1)
+              true
+            },
+            CustomAccessibilityAction(nativeString("Move down")) {
+              onStep(1)
+              true
+            },
           )
+      }.pointerInput(start) {
+        detectDragGestures(
+          onDragStart = { latestStart() },
+          onDrag = { change, delta ->
+            change.consume()
+            latestDrag(delta)
+          },
+          onDragEnd = { latestEnd() },
+          onDragCancel = { latestEnd() },
+        )
+      },
+  ) {
+    val edge = Offset(center.x, if (start) size.height else 0f)
+    val knob = edge + Offset(0f, if (start) -10.dp.toPx() else 10.dp.toPx())
+    // Animate ink only: the gesture target stays full-sized and stable.
+    scale(appearance.value, pivot = edge) {
+      drawLine(color, edge, knob, 2.dp.toPx())
+      drawCircle(color, 6.dp.toPx(), knob)
+    }
+  }
+}
+
+@Composable
+private fun SessionDiffSelectionMenu(
+  position: Offset,
+  selectionTop: Int,
+  viewportTop: Int,
+  viewportBottom: Int,
+  onDismiss: () -> Unit,
+  onReference: () -> Unit,
+  onCopy: () -> Unit,
+) {
+  val gap = with(LocalDensity.current) { 8.dp.roundToPx() }
+  var above by remember { mutableStateOf(false) }
+  val placement =
+    remember(position, selectionTop, viewportTop, viewportBottom, gap) {
+      object : PopupPositionProvider {
+        override fun calculatePosition(
+          anchorBounds: IntRect,
+          windowSize: IntSize,
+          layoutDirection: LayoutDirection,
+          popupContentSize: IntSize,
+        ): IntOffset {
+          val x =
+            (anchorBounds.left + position.x.toInt() - popupContentSize.width / 2)
+              .coerceIn(gap, (windowSize.width - popupContentSize.width - gap).coerceAtLeast(gap))
+          val below = position.y.toInt() + gap
+          above = below + popupContentSize.height > viewportBottom
+          // Bound to Review, not the window: toolbars/insets are not code space.
+          // A selection taller than the viewport has no outside space; keep its
+          // actions visible at the viewport's top in that case.
+          val y = if (above) (selectionTop - gap - popupContentSize.height).coerceAtLeast(viewportTop) else below
+          return IntOffset(x, anchorBounds.top + y)
         }
-        if (file.truncated) item(key = "truncated:${file.path}") { DiffNotice(nativeString("This file’s patch was truncated.")) }
+      }
+    }
+  val expansion = remember { Animatable(0f) }
+  LaunchedEffect(Unit) { expansion.animateTo(1f, tween(200)) }
+  Popup(popupPositionProvider = placement, onDismissRequest = onDismiss, properties = PopupProperties(focusable = false, dismissOnClickOutside = false, clippingEnabled = false)) {
+    Surface(
+      modifier =
+        Modifier.graphicsLayer {
+          scaleX = expansion.value
+          scaleY = expansion.value
+          transformOrigin = TransformOrigin(0.5f, if (above) 1f else 0f)
+        },
+      color = ClawTheme.colors.surfaceRaised,
+      shape =
+        androidx.compose.foundation.shape
+          .RoundedCornerShape(12.dp),
+      shadowElevation = 6.dp,
+    ) {
+      Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+        TextButton(onClick = onReference) {
+          Icon(Icons.Default.ChatBubbleOutline, null, Modifier.size(16.dp))
+          Text(nativeString("To chat"), Modifier.padding(start = 6.dp))
+        }
+        TextButton(onClick = onCopy) {
+          Icon(Icons.Default.ContentCopy, null, Modifier.size(16.dp))
+          Text(nativeString("Copy"), Modifier.padding(start = 6.dp))
+        }
       }
     }
   }
@@ -456,6 +777,9 @@ private fun SessionDiffCodeRow(
   gutterWidth: Float,
   showLineNumbers: Boolean,
   toggleLineNumbers: () -> Unit,
+  isSelected: Boolean,
+  selectionAlpha: Float,
+  selectLine: () -> Unit,
 ) {
   val colors = ClawTheme.colors
   val style = ClawTheme.type.mono
@@ -476,6 +800,13 @@ private fun SessionDiffCodeRow(
       .height(rowHeight)
       .clickable(interactionSource = null, indication = null, onClickLabel = toggleLabel, onClick = toggleLineNumbers)
       .semantics {
+        selected = isSelected
+        if (line.oldLine != null || line.newLine != null) {
+          onLongClick(label = nativeString("Select lines")) {
+            selectLine()
+            true
+          }
+        }
         stateDescription = numbersState
         val numbers = if (showLineNumbers) "${line.oldLine ?: ""} ${line.newLine ?: ""} " else ""
         text = AnnotatedString("$numbers$sign ${line.text}")
@@ -490,6 +821,7 @@ private fun SessionDiffCodeRow(
       }
     drawRect(colors.codeBg)
     drawRect(background)
+    if (isSelected) drawRect(colors.accent.copy(alpha = selectionAlpha))
     val numbers =
       "${line.oldLine?.toString().orEmpty().padStart(gutterDigits)} " +
         "${line.newLine?.toString().orEmpty().padStart(gutterDigits)} "
@@ -501,7 +833,7 @@ private fun SessionDiffCodeRow(
     // Let Android shape intact text, including surrogate pairs and combining
     // sequences. Canvas clipping avoids a giant Compose text-layout surface.
     clipRect(left = gutterWidth) {
-      drawIntoCanvas { it.nativeCanvas.drawText(line.text, gutterWidth - offset, baseline, codePaint) }
+      drawIntoCanvas { it.nativeCanvas.drawText(line.text.replace("\t", "    "), gutterWidth - offset, baseline, codePaint) }
     }
   }
 }
